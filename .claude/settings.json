@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "WebFetch(domain:github.com)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/wasm-reminder.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/docs-precommit-check.sh\"",
+            "statusMessage": "Docs gate (review docs/*.md before commit/push)"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/review-precommit-check.sh\"",
+            "statusMessage": "Adversarial-review gate (review a code fix before commit/push)"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | grep -qE '/wasm-build/(.*\\.(cpp|cc|h|hpp)|CMakeLists\\.txt)$' && echo '⚠ wasm engine source modified — rebuild (ninja -C wasm-build/build), node-smoke on real APKs, then copy the fresh .js/.wasm to the repo root and bump the build SHA in index.html; the served engine is now stale.' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
