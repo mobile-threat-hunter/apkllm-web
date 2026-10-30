@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>apkllm — in-browser APK container analyzer</title>
+<link rel="icon" href="data:,">
+<!-- The build pin cache-busts apkllm.js / apkllm.wasm / worker.js / domain.js AS A
+     SET: a returning visitor whose browser kept an old apkllm.js but pulls a new
+     apkllm.wasm gets an ABI mismatch and "engine load failed". Bump on EVERY wasm
+     rebuild (wasm-build/README.md). The base is the apkllm commit the engine was
+     built from and -N counts rebuilds against it. Defined ONCE here; every other
+     ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
+<script>
+window.__APKLLM_BUILD = "644c9e7-2";
+{
+  const l = document.createElement("link");
+  l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
+  l.href = "apkllm.wasm?v=" + window.__APKLLM_BUILD;
+  document.head.appendChild(l);
+}
+</script>
+<style>
+  :root {
+    --bg:#000; --bg-1:#04050a; --bg-2:#08090f; --bg-3:#0d0f16; --bg-4:#13161f;
+    --line-1:rgba(255,255,255,0.05); --line-2:rgba(255,255,255,0.09); --line-3:rgba(255,255,255,0.14);
+    --fg:#e6e9f0; --fg-2:#b6bbc7; --fg-3:#6f7480;
+    --brand:#6ba1ff; --brand-soft:rgba(107,161,255,0.10); --hl:rgba(107,161,255,0.14);
+    --good:#5fdca0; --warn:#f5b441; --bad:#ff5e5e; --info:#67c5e6;
+    --e-out:cubic-bezier(0.16,1,0.3,1);
+    --f-ui:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    --f-mono:"JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    background:var(--bg); color:var(--fg); font:13px/1.55 var(--f-mono);
+    -webkit-font-smoothing:antialiased; display:flex; flex-direction:column;
+    background-image:radial-gradient(1200px 600px at 75% -10%, rgba(107,161,255,0.045), transparent 60%);
+    background-attachment:fixed;
+  }
+  * { scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.10) transparent; }
+  ::selection { background:rgba(107,161,255,0.30); color:#fff; }
+  a { color:var(--brand); }
+  header {
+    display:flex; align-items:center; gap:14px; padding:10px 18px;
+    border-bottom:1px solid var(--line-2); background:var(--bg-1); font-family:var(--f-ui);
+  }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header h1 span { color:var(--brand); }
+  header .sub { color:var(--fg-3); font-size:12px; }
+  #status { margin-left:auto; color:var(--fg-3); font-size:12px; }
+  #status b { color:var(--fg); font-weight:600; }
+  .pill {
+    display:inline-block; padding:2.5px 9px; border-radius:999px; font:600 10.5px/1.4 var(--f-ui);
+    letter-spacing:0.025em; vertical-align:middle; box-shadow:inset 0 0 0 1px var(--line-3); color:var(--fg-2);
+  }
+  .pill.ok   { background:rgba(95,220,160,0.10); color:var(--good); box-shadow:inset 0 0 0 1px rgba(95,220,160,0.30); }
+  .pill.bad  { background:rgba(255,94,94,0.10);  color:var(--bad);  box-shadow:inset 0 0 0 1px rgba(255,94,94,0.34); }
+  .pill.warn { background:rgba(245,180,65,0.10); color:var(--warn); box-shadow:inset 0 0 0 1px rgba(245,180,65,0.34); }
+  .pill.info { background:rgba(103,197,230,0.10); color:var(--info); box-shadow:inset 0 0 0 1px rgba(103,197,230,0.34); }
+  .pill.na   { color:var(--fg-3); }
+  main { flex:1; display:flex; flex-direction:column; min-height:0; }
+  /* drop card */
+  #drop { display:flex; align-items:center; justify-content:center; flex:1; padding:24px; cursor:pointer; }
+  #drop input { display:none; }
+  #dropcard {
+    width:min(560px, 100%); padding:40px 28px; text-align:center; border:1px dashed var(--line-3);
+    border-radius:14px; background:var(--bg-2); color:var(--fg-2); font-family:var(--f-ui);
+    transition:border-color 160ms var(--e-out), background 160ms var(--e-out);
+  }
+  #drop.drag #dropcard { border-color:var(--brand); background:var(--hl); color:var(--fg); }
+  #dropcard .big { font-size:17px; color:var(--fg); font-weight:600; margin-bottom:8px; }
+  #dropcard .drophint { font-size:12px; color:var(--fg-3); }
+  #dropcard #droploading { display:none; font-size:13px; color:var(--fg); }
+  #drop.loading #droploading { display:block; }
+  #drop.loading .big, #drop.loading .drophint { display:none; }
+  #drop.hidden { display:none; }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--line-3); border-top-color:var(--brand); border-radius:50%; animation:spin 0.8s linear infinite; margin-right:8px; vertical-align:-2px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* app */
+  #app { display:none; flex:1; flex-direction:column; min-height:0; }
+  #app.on { display:flex; }
+  #filebar {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 18px;
+    border-bottom:1px solid var(--line-1); background:var(--bg-1); font-size:12px; color:var(--fg-2);
+  }
+  #filebar .name { color:var(--fg); font-weight:600; }
+  #filebar button { margin-left:auto; }
+  button, select, input[type=number], input[type=search] {
+    font:12px var(--f-ui); color:var(--fg); background:var(--bg-3); border:1px solid var(--line-2);
+    border-radius:7px; padding:4px 9px;
+  }
+  button { cursor:pointer; }
+  button:hover { background:var(--bg-4); border-color:var(--line-3); }
+  button:disabled { opacity:0.5; cursor:default; }
+  #tabs { display:flex; gap:2px; padding:0 18px; border-bottom:1px solid var(--line-2); background:var(--bg-1); font-family:var(--f-ui); }
+  #tabs .tab { padding:9px 14px; color:var(--fg-3); cursor:pointer; border-bottom:2px solid transparent; font-size:12.5px; font-weight:600; }
+  #tabs .tab:hover { color:var(--fg-2); }
+  #tabs .tab.on { color:var(--fg); border-bottom-color:var(--brand); }
+  #tabs .tab .pill { margin-left:6px; }
+  .panel { display:none; flex:1; overflow:auto; padding:14px 18px 40px; min-height:0; }
+  .panel.on { display:block; }
+  .card { background:var(--bg-2); border:1px solid var(--line-1); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .card h2 { font:600 12.5px var(--f-ui); color:var(--fg-2); margin:0 0 8px; letter-spacing:0.02em; text-transform:uppercase; }
+  .card p.note { color:var(--fg-3); font-size:11.5px; margin:6px 0 0; font-family:var(--f-ui); }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:3px 16px; font-size:12px; }
+  .kv dt { color:var(--fg-3); }
+  .kv dd { margin:0; color:var(--fg); word-break:break-all; }
+  .checks { list-style:none; margin:0; padding:0; }
+  .checks li { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:6px 0; border-top:1px solid var(--line-1); font-size:12px; }
+  .checks li:first-child { border-top:0; }
+  .checks .id { color:var(--fg-2); font-weight:600; }
+  .checks .sev { color:var(--fg-3); font-size:11px; margin-left:6px; font-family:var(--f-ui); }
+  .checks .reason { color:var(--fg-2); }
+  .checks .detail { color:var(--fg-3); font-size:11px; margin-top:2px; word-break:break-all; }
+  .form { display:flex; flex-wrap:wrap; gap:14px; align-items:end; }
+  .form label { display:flex; flex-direction:column; gap:4px; font:11.5px var(--f-ui); color:var(--fg-3); }
+  .form input[type=number] { width:90px; }
+  .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .toolbar input[type=search] { width:260px; }
+  .toolbar .count { color:var(--fg-3); font-size:11.5px; font-family:var(--f-ui); }
+  .chip { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--line-2); color:var(--fg-2); font:11px var(--f-ui); cursor:pointer; user-select:none; }
+  .chip.on { border-color:var(--brand); color:var(--brand); background:var(--brand-soft); }
+  .chip .n { color:var(--fg-3); margin-left:4px; }
+  table { border-collapse:collapse; width:100%; font-size:11.5px; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line-1); vertical-align:top; white-space:nowrap; }
+  th { position:sticky; top:0; background:var(--bg-2); color:var(--fg-3); font:600 11px var(--f-ui); z-index:1; }
+  td.name { white-space:normal; word-break:break-all; max-width:420px; color:var(--fg); }
+  td.wrap { white-space:normal; max-width:520px; color:var(--fg-2); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  th.num { text-align:right; }
+  tr.fail td { background:rgba(255,94,94,0.05); }
+  tr.cond td { background:rgba(245,180,65,0.05); }
+  tr.flag td { background:rgba(245,180,65,0.05); }
+  tr.sel td { background:var(--hl); }
+  td.diff { color:var(--bad); font-weight:600; }
+  td.dim { color:var(--fg-3); }
+  .tiny { font:11px var(--f-ui); color:var(--fg-3); }
+  pre.hex { margin:8px 0 0; padding:10px; background:var(--bg-1); border:1px solid var(--line-1); border-radius:8px; font-size:11px; line-height:1.5; overflow:auto; color:var(--fg-2); }
+  .sev-tamper { color:var(--bad); } .sev-suspicious { color:var(--warn); } .sev-info { color:var(--info); }
+  .finding { padding:6px 0; border-top:1px solid var(--line-1); font-size:12px; }
+  .finding:first-child { border-top:0; }
+  .finding .fid { font-weight:600; }
+  .finding .fentry { color:var(--fg-3); margin-left:8px; }
+  .finding .fdetail { color:var(--fg-2); margin-top:2px; white-space:normal; }
+  .err { color:var(--bad); }
+  footer { padding:8px 18px; border-top:1px solid var(--line-1); color:var(--fg-3); font:11px var(--f-ui); }
+  @media (max-width:720px) { .checks li { grid-template-columns:1fr; } .toolbar input[type=search] { width:100%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>apkllm</span> · APK container</h1>
+  <span class="sub">real AOSP libziparchive in your browser — install gate · content · tamper scan · signing block</span>
+  <span id="status">loading engine…</span>
+</header>
+<main>
+<label id="drop" for="file">
+  <div id="dropcard">
+    <div class="big">Drop an APK here</div>
+    <div class="drophint">or click to choose — nothing is uploaded, the container is read locally by the device's own ZIP reader</div>
+    <div id="droploading"><span class="spin"></span>reading container…</div>
+  </div>
+  <input id="file" type="file" accept=".apk,.zip,.jar,.apks,.xapk,application/octet-stream">
+</label>
+
+<div id="app">
+  <div id="filebar">
+    <span class="name" id="fname"></span>
+    <span id="fsize"></span>
+    <span id="fpills"></span>
+    <button id="another">load another</button>
+  </div>
+  <div id="tabs">
+    <div class="tab on" data-tab="gate">Install gate</div>
+    <div class="tab" data-tab="content">Content</div>
+    <div class="tab" data-tab="tamper">Tamper scan</div>
+    <div class="tab" data-tab="signing">Signing block</div>
+  </div>
+
+  <!-- ── Install gate ─────────────────────────────────────────────── -->
+  <section class="panel on" id="panel-gate">
+    <div class="card">
+      <h2>Manifest inputs</h2>
+      <div class="form">
+        <label>extractNativeLibs
+          <select id="in-enl"><option value="">unknown</option><option value="true">true</option><option value="false">false</option></select>
+        </label>
+        <label>targetSdk
+          <input id="in-tsdk" type="number" min="1" max="99" placeholder="unknown">
+        </label>
+        <label>in base AssetManager
+          <select id="in-arsc"><option value="">unknown</option><option value="true">yes (base APK)</option><option value="false">no (isolated split)</option></select>
+        </label>
+        <label>device page size
+          <select id="in-page"><option value="4096">4 KiB</option><option value="16384">16 KiB</option></select>
+        </label>
+      </div>
+      <p class="note">apkllm never parses the manifest (that is axmlllm's job in MMH). In MMH these values arrive from axmlllm; here you supply them. Unknown ⇒ the verdict stays an honest tri-state — nothing is guessed.</p>
+    </div>
+    <div class="card">
+      <h2>Container verdict</h2>
+      <div id="gate-verdict"></div>
+    </div>
+    <div class="card">
+      <h2>Checks</h2>
+      <ul class="checks" id="gate-checks"></ul>
+    </div>
+    <div class="card">
+      <h2>Entries <span class="tiny">(every entry libziparchive enumerates — failing gates are highlighted, never hidden)</span></h2>
+      <div class="toolbar">
+        <input type="search" id="gate-filter" placeholder="filter by name…">
+        <span id="gate-chips"></span>
+        <span class="count" id="gate-count"></span>
+      </div>
+      <div style="overflow:auto"><table id="gate-table"></table></div>
+    </div>
+  </section>
+
+  <!-- ── Content ──────────────────────────────────────────────────── -->
+  <section class="panel" id="panel-content">
+    <div class="card">
+      <h2>Summary <span class="tiny">(first 512 device-produced bytes of each entry, typed by magic — the bytes' claim, never the name)</span></h2>
+      <div id="content-summary"></div>
+    </div>
+    <div class="card">
+      <h2>Checks</h2>
+      <ul class="checks" id="content-checks"></ul>
+    </div>
+    <div class="card">
+      <h2>Entries</h2>
+      <div class="toolbar">
+        <input type="search" id="content-filter" placeholder="filter by name…">
+        <span id="content-chips"></span>
+        <span class="count" id="content-count"></span>
+      </div>
+      <div style="overflow:auto"><table id="content-table"></table></div>
+      <div id="content-hex"></div>
+    </div>
+  </section>
+
+  <!-- ── Tamper scan ──────────────────────────────────────────────── -->
+  <section class="panel" id="panel-tamper">
+    <div class="card">
+      <h2>Present vs consumed</h2>
+      <div id="tamper-head"></div>
+    </div>
+    <div class="card">
+      <h2>Checks</h2>
+      <ul class="checks" id="tamper-checks"></ul>
+    </div>
+    <div class="card">
+      <h2>Findings</h2>
+      <div id="tamper-findings"></div>
+    </div>
+    <div class="card">
+      <h2>Raw walk <span class="tiny">(own ZIP reader, not libziparchive — Central Directory vs Local File Header; a divergent LFH field is red)</span></h2>
+      <div class="toolbar">
+        <input type="search" id="tamper-filter" placeholder="filter by name…">
+        <span class="count" id="tamper-count"></span>
+      </div>
+      <div style="overflow:auto"><table id="tamper-table"></table></div>
+    </div>
+  </section>
+
+  <!-- ── Signing block ────────────────────────────────────────────── -->
+  <section class="panel" id="panel-signing">
+    <div class="card">
+      <h2>ZIP tail &amp; APK Signing Block <span class="tiny">(structural location only — verification is Java apksig, outside this demo)</span></h2>
+      <div id="signing-body"></div>
+    </div>
+  </section>
+</div>
+</main>
+<footer>apkllm-web · engine build <span id="buildpin"></span> · real AOSP <code>system/libziparchive</code> (android16-qpr2-release) + apkllm native/container · analyzer, not gatekeeper: verdicts are informational, every entry is shown</footer>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtSize = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KiB" : (n / 1048576).toFixed(2) + " MiB";
+const hex = (n, w = 0) => "0x" + Number(n).toString(16).padStart(w, "0");
+const tri = (v) => v === true ? '<span class="pill ok">true</span>' : v === false ? '<span class="pill bad">false</span>' : '<span class="pill na">unknown</span>';
+const okPill = (ok, yes = "ok", no = "fail", unk = "indeterminate") =>
+  ok === true ? `<span class="pill ok">${yes}</span>` : ok === false ? `<span class="pill bad">${no}</span>` : `<span class="pill warn">${unk}</span>`;
+$("#buildpin").textContent = window.__APKLLM_BUILD;
+const statusEl = $("#status");
+
+// ── worker ───────────────────────────────────────────────────────────────
+const worker = new Worker("worker.js?v=" + window.__APKLLM_BUILD);
+const _pending = new Map(); let _wid = 1;
+worker.onmessage = e => {
+  const p = _pending.get(e.data.id); if (!p) return;
+  _pending.delete(e.data.id);
+  if (e.data.ok) p.resolve(e.data.result); else p.reject(new Error(e.data.error));
+};
+worker.onerror = e => {
+  console.error("worker error:", e.message); statusEl.innerHTML = '<span class="pill bad">engine load failed</span>';
+  // settle every pending call so loadFile's finally runs and the drop card is not stuck on the spinner
+  for (const p of _pending.values()) p.reject(new Error("worker crashed: " + (e.message || "unknown")));
+  _pending.clear();
+};
+function wcall(msg, transfer) {
+  const id = _wid++;
+  return new Promise((res, rej) => { _pending.set(id, { resolve: res, reject: rej }); worker.postMessage({ ...msg, id }, transfer || []); });
+}
+wcall({ type: "init", buildSha: window.__APKLLM_BUILD })
+  .then(() => { statusEl.innerHTML = "engine ready · <b>drop an APK</b>"; })
+  .catch(e => { statusEl.innerHTML = '<span class="pill bad">engine load failed</span>'; console.error(e); });
+
+// ── file intake ──────────────────────────────────────────────────────────
+const drop = $("#drop");
+$("#file").addEventListener("change", e => { if (e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ""; });
+["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("drag"); }));
+["dragleave", "drop"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("drag"); }));
+document.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+$("#another").addEventListener("click", () => { $("#app").classList.remove("on"); drop.classList.remove("hidden"); });
+
+let report = null;   // { file, tamper, signing, content, gate }
+// Load generation: the worker holds ONE APK (/input.apk) and runs calls in order, so a
+// second drop while the first is in flight would otherwise land the first file's late
+// gate result on the second file's report (review finding ADV-2). Every await checks
+// that it still belongs to the newest load; stale results are dropped.
+let loadGen = 0;
+
+async function loadFile(file) {
+  const gen = ++loadGen;
+  drop.classList.remove("hidden"); drop.classList.add("loading");
+  $("#app").classList.remove("on");
+  statusEl.innerHTML = '<span class="spin"></span>reading ' + esc(file.name);
+  // a new file starts with every filter/chip at its default (Content chips reset in renderContent)
+  gateClassOn = new Set(CLASS_ORDER);
+  for (const id of ["#gate-filter", "#content-filter", "#tamper-filter"]) $(id).value = "";
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (gen !== loadGen) return;
+    const r = await wcall({ type: "load", bytes }, [bytes.buffer]);
+    if (gen !== loadGen) return;
+    const next = { file: { name: file.name, size: file.size }, ...r, gate: null };
+    next.gate = await wcall({ type: "gate", ...gateParams() });
+    if (gen !== loadGen) return;
+    report = next;
+    renderAll();
+    drop.classList.add("hidden"); $("#app").classList.add("on");
+    statusEl.innerHTML = "engine ready · <b>" + esc(file.name) + "</b>";
+  } catch (e) {
+    if (gen !== loadGen) return;
+    statusEl.innerHTML = '<span class="pill bad">load failed</span> ' + esc(e.message);
+    console.error(e);
+  } finally { if (gen === loadGen) drop.classList.remove("loading"); }
+}
+
+// ── tabs ─────────────────────────────────────────────────────────────────
+for (const t of document.querySelectorAll("#tabs .tab")) t.addEventListener("click", () => {
+  document.querySelectorAll("#tabs .tab").forEach(x => x.classList.toggle("on", x === t));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "panel-" + t.dataset.tab));
+});
+
+// ── manifest inputs → re-run the gate ────────────────────────────────────
+function gateParams() {
+  const enl = $("#in-enl").value, arsc = $("#in-arsc").value, tsdk = $("#in-tsdk").value;
+  return {
+    extractNativeLibs: enl === "" ? null : enl === "true",
+    targetSdk: tsdk === "" ? null : Number(tsdk),
+    arscScope: arsc === "" ? null : arsc === "true",
+    pageSize: Number($("#in-page").value),
+  };
+}
+for (const id of ["#in-enl", "#in-arsc", "#in-page"]) $(id).addEventListener("change", rerunGate);
+$("#in-tsdk").addEventListener("change", rerunGate);
+async function rerunGate() {
+  if (!report) return;
+  const gen = loadGen, cur = report;
+  try {
+    const g = await wcall({ type: "gate", ...gateParams() });
+    if (gen !== loadGen || report !== cur) return;   // a newer load replaced the APK meanwhile
+    report.gate = g; renderGate(); renderFilebar();
+  } catch (e) { if (gen === loadGen) $("#gate-verdict").innerHTML = '<span class="err">' + esc(e.message) + "</span>"; }
+}
+
+// ── rendering ────────────────────────────────────────────────────────────
+function renderAll() { renderFilebar(); renderGate(); renderContent(); renderTamper(); renderSigning(); }
+
+function renderChecks(el, checks) {
+  el.innerHTML = (checks || []).map(c => `
+    <li><div>${okPill(c.ok)}</div>
+        <div><span class="id">${esc(c.id)}</span><span class="sev">${esc(c.severity)}</span>
+             <div class="reason">${esc(c.reason)}</div>
+             ${c.detail ? `<div class="detail">${esc(JSON.stringify(c.detail))}</div>` : ""}</div></li>`).join("");
+}
+
+function renderFilebar() {
+  const { file, tamper, signing, gate, content } = report;
+  $("#fname").textContent = file.name;
+  $("#fsize").textContent = fmtSize(file.size) + (gate.ok ? " · " + gate.entry_count + " entries" : "");
+  const pills = [];
+  if (tamper.ok) pills.push(tamper.libziparchive_would_open ? '<span class="pill ok">device reader opens</span>' : '<span class="pill bad">device reader refuses</span>');
+  else pills.push('<span class="pill bad">not a ZIP</span>');
+  if (tamper.ok) {
+    const sig = tamper.findings.filter(f => f.severity !== "info").length;
+    pills.push(sig ? `<span class="pill warn">${sig} tamper finding${sig > 1 ? "s" : ""}</span>` : '<span class="pill ok">no tampering</span>');
+  }
+  if (gate.ok) pills.push(gate.installable === null ? '<span class="pill warn">installable: needs manifest</span>' : gate.installable ? '<span class="pill ok">installable (container)</span>' : '<span class="pill bad">not installable (container)</span>');
+  if (signing.ok) pills.push(signing.has_signing_block ? '<span class="pill info">APK Signing Block</span>' : '<span class="pill na">no signing block</span>');
+  if (content.ok && content.summary.role_mismatch) pills.push(`<span class="pill bad">${content.summary.role_mismatch} role mismatch</span>`);
+  $("#fpills").innerHTML = pills.join(" ");
+}
+
+// Install gate -------------------------------------------------------------
+const CLASS_ORDER = ["dex", "native_lib", "manifest", "resources_arsc", "resource", "meta", "other"];
+let gateClassOn = new Set(CLASS_ORDER);
+function renderGate() {
+  const g = report.gate;
+  const v = $("#gate-verdict");
+  if (!g.ok) {
+    v.innerHTML = `<span class="pill bad">libziparchive refused to open</span> <span class="err">${esc(g.error)}</span>
+      <p class="note">The device's own reader rejects this container; see the Tamper scan tab for what the raw walk sees.</p>`;
+    $("#gate-checks").innerHTML = ""; $("#gate-table").innerHTML = ""; $("#gate-chips").innerHTML = ""; $("#gate-count").textContent = "";
+    return;
+  }
+  v.innerHTML = `<dl class="kv">
+    <dt>installable (container)</dt><dd>${tri(g.installable)} ${g.needs_manifest ? '<span class="tiny">needs_manifest — a manifest input is unknown</span>' : ""}</dd>
+    <dt>if extractNativeLibs=false</dt><dd>${tri(g.installable_if_extract_false)}</dd>
+    <dt>if extractNativeLibs=true</dt><dd>${tri(g.installable_if_extract_true)}</dd>
+    <dt>container consistent with</dt><dd>extractNativeLibs ∈ {${g.consistent_extract_native_libs.join(", ") || "∅"}}</dd>
+    <dt>inputs echoed</dt><dd>extractNativeLibs=${g.extract_native_libs ?? "unknown"} · targetSdk=${g.target_sdk ?? "unknown"} · in_base_asset_manager=${g.in_base_asset_manager ?? "unknown"} · page=${g.page_size}</dd>
+    <dt>exceptions</dt><dd>${g.exceptions.length} entr${g.exceptions.length === 1 ? "y" : "ies"} fail the strict gate</dd>
+  </dl>`;
+  renderChecks($("#gate-checks"), g.checks);
+  const counts = {};
+  for (const e of g.entries) counts[e.class] = (counts[e.class] ?? 0) + 1;
+  $("#gate-chips").innerHTML = CLASS_ORDER.filter(c => counts[c]).map(c =>
+    `<span class="chip ${gateClassOn.has(c) ? "on" : ""}" data-c="${c}">${c}<span class="n">${counts[c]}</span></span>`).join(" ");
+  for (const ch of $("#gate-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
+    const c = ch.dataset.c; if (gateClassOn.has(c)) gateClassOn.delete(c); else gateClassOn.add(c);
+    ch.classList.toggle("on"); renderGateTable();
+  });
+  renderGateTable();
+}
+$("#gate-filter").addEventListener("input", renderGateTable);
+function renderGateTable() {
+  const g = report.gate; if (!g.ok) return;
+  const q = $("#gate-filter").value.toLowerCase();
+  const rows = g.entries.map((e, i) => ({ e, i })).filter(({ e }) => gateClassOn.has(e.class) && (!q || e.name.toLowerCase().includes(q)));
+  $("#gate-count").textContent = rows.length + " / " + g.entries.length;
+  $("#gate-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>class</th><th>method</th><th class="num">size</th><th class="num">compressed</th><th class="num">offset</th><th>4K</th><th>16K</th><th>gate</th><th>verdict</th><th>reason</th><th></th></tr></thead><tbody>` +
+    rows.map(({ e, i }) => `<tr class="${!e.passes ? (e.conditional ? "cond" : "fail") : ""}">
+      <td class="dim">${i}</td><td class="name">${esc(e.name)}${e.primary_multidex ? ' <span class="pill info">ART auto-load</span>' : ""}</td>
+      <td>${e.class}</td><td>${e.method}${e.method_known ? "" : ' <span class="pill bad">forged</span>'}${e.has_data_descriptor ? ' <span class="tiny">DD</span>' : ""}</td>
+      <td class="num">${e.uncompressed_size}</td><td class="num">${e.compressed_size}</td><td class="num">${hex(e.data_offset)}</td>
+      <td>${e.aligned_4k ? "✓" : "·"}</td><td>${e.aligned_16k ? "✓" : "·"}</td>
+      <td class="dim">${esc(e.gate)}</td>
+      <td>${e.passes ? '<span class="pill ok">passes</span>' : e.conditional ? '<span class="pill warn">conditional</span>' : `<span class="pill bad">${e.install_fatal ? "install fatal" : "fails"}</span>`}</td>
+      <td class="wrap">${esc(e.reason)}${e.needs.length ? ` <span class="tiny">needs: ${esc(e.needs.join(", "))}</span>` : ""}</td>
+      <td><button data-x="${esc(e.name)}" title="device-faithful bytes (method 8 inflate / 0 stored / else lenient raw)">bytes</button></td></tr>`).join("") + "</tbody>";
+  for (const b of $("#gate-table").querySelectorAll("button[data-x]")) b.addEventListener("click", () => extractAndSave(b.dataset.x, b));
+}
+
+async function extractAndSave(name, btn) {
+  btn.disabled = true;
+  try {
+    const r = await wcall({ type: "extract", name });
+    if (!r.ok) { alert("extract failed: " + r.error); return; }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([r.data]));
+    a.download = name.split("/").pop() || "entry.bin";
+    a.title = r.disposition;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) { alert("extract failed: " + e.message); }
+  finally { btn.disabled = false; }
+}
+
+// Content ------------------------------------------------------------------
+let contentCatOn = null;
+function renderContent() {
+  const c = report.content;
+  if (!c.ok) {
+    $("#content-summary").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(c.error)}</span>`;
+    $("#content-checks").innerHTML = ""; $("#content-table").innerHTML = ""; $("#content-chips").innerHTML = ""; $("#content-count").textContent = ""; $("#content-hex").innerHTML = "";
+    return;
+  }
+  const s = c.summary;
+  $("#content-summary").innerHTML = `<dl class="kv">
+    <dt>by content type</dt><dd>${Object.entries(s.by_content_type).map(([k, n]) => `${esc(k)} <span class="tiny">${n}</span>`).join(" · ")}</dd>
+    <dt>unknown by kind</dt><dd>${Object.keys(s.unknown_by_kind).length ? Object.entries(s.unknown_by_kind).map(([k, n]) => `${k} <span class="tiny">${n}</span>`).join(" · ") : "—"}</dd>
+    <dt>role mismatch</dt><dd>${s.role_mismatch} ${s.role_indeterminate ? `<span class="tiny">(+${s.role_indeterminate} unreadable)</span>` : ""}</dd>
+    <dt>extension mismatch</dt><dd>${s.extension_mismatch} ${s.extension_indeterminate ? `<span class="tiny">(+${s.extension_indeterminate} unreadable)</span>` : ""}</dd>
+  </dl>`;
+  renderChecks($("#content-checks"), c.checks);
+  contentCatOn = new Set(Object.keys(s.by_category));
+  $("#content-chips").innerHTML = Object.entries(s.by_category).map(([k, n]) => `<span class="chip on" data-c="${esc(k)}">${esc(k)}<span class="n">${n}</span></span>`).join(" ");
+  for (const ch of $("#content-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
+    const k = ch.dataset.c; if (contentCatOn.has(k)) contentCatOn.delete(k); else contentCatOn.add(k);
+    ch.classList.toggle("on"); renderContentTable();
+  });
+  $("#content-hex").innerHTML = "";
+  renderContentTable();
+}
+$("#content-filter").addEventListener("input", renderContentTable);
+function renderContentTable() {
+  const c = report.content; if (!c.ok) return;
+  const q = $("#content-filter").value.toLowerCase();
+  const rows = c.entries.map((e, i) => ({ e, i })).filter(({ e }) => contentCatOn.has(e.category) && (!q || e.name.toLowerCase().includes(q)));
+  $("#content-count").textContent = rows.length + " / " + c.entries.length;
+  $("#content-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>class</th><th>reader</th><th>content</th><th>category</th><th>detail</th><th class="num">entropy</th><th>size ok</th><th>flags</th></tr></thead><tbody>` +
+    rows.map(({ e, i }) => `<tr data-i="${i}" class="${e.role_mismatch === true || e.extension_mismatch === true ? "flag" : ""}">
+      <td class="dim">${i}</td><td class="name">${esc(e.name)}</td><td>${e.class}</td>
+      <td>${e.disposition}${e.error ? ` <span class="err" title="${esc(e.error)}">!</span>` : ""}</td>
+      <td>${esc(e.content_type)}${e.unknown_kind ? ` <span class="tiny">${e.unknown_kind}</span>` : ""}</td>
+      <td class="dim">${esc(e.category)}</td>
+      <td class="wrap dim">${Object.keys(e.detail).length ? esc(JSON.stringify(e.detail)) : ""}</td>
+      <td class="num">${e.entropy == null ? "—" : e.entropy.toFixed(2)}</td>
+      <td>${e.size_validated ? "✓" : '<span class="tiny" title="head stopped early or reader rejected — passed no end-of-entry check">partial</span>'}</td>
+      <td>${e.role_mismatch === true ? '<span class="pill bad">role ≠ content</span>' : e.role_mismatch === null ? '<span class="pill na">role ?</span>' : ""}
+          ${e.extension_mismatch === true ? '<span class="pill warn">ext ≠ content</span>' : e.extension_mismatch === null ? '<span class="pill na">ext ?</span>' : ""}
+          ${e.encrypted_flag ? '<span class="pill warn">gpbf encrypted</span>' : ""}</td></tr>`).join("") + "</tbody>";
+  for (const tr of $("#content-table").querySelectorAll("tr[data-i]")) tr.addEventListener("click", () => showHead(Number(tr.dataset.i), tr));
+}
+function showHead(i, tr) {
+  $("#content-table").querySelectorAll("tr.sel").forEach(x => x.classList.remove("sel"));
+  tr.classList.add("sel");
+  const h = report.content.heads[i];
+  if (!h) { $("#content-hex").innerHTML = ""; return; }
+  const b = h.head; let out = "";
+  for (let o = 0; o < b.length; o += 16) {
+    const chunk = b.subarray(o, o + 16);
+    const hx = Array.from(chunk, x => x.toString(16).padStart(2, "0")).join(" ").padEnd(47);
+    const as = Array.from(chunk, x => x >= 0x20 && x < 0x7f ? String.fromCharCode(x) : ".").join("");
+    out += o.toString(16).padStart(8, "0") + "  " + hx + "  " + as + "\n";
+  }
+  $("#content-hex").innerHTML = `<div class="tiny" style="margin-top:8px">${esc(h.name)} — first ${b.length} bytes as its ${h.disposition} reader produced them${h.complete ? " (whole entry)" : ""}</div><pre class="hex">${esc(out) || "(empty)"}</pre>`;
+}
+
+// Tamper -------------------------------------------------------------------
+function renderTamper() {
+  const t = report.tamper;
+  if (!t.ok) {
+    $("#tamper-head").innerHTML = `<span class="pill bad">raw walk failed</span> <span class="err">${esc(t.error)}</span>`;
+    $("#tamper-checks").innerHTML = ""; $("#tamper-findings").innerHTML = ""; $("#tamper-table").innerHTML = ""; $("#tamper-count").textContent = "";
+    return;
+  }
+  $("#tamper-head").innerHTML = `<dl class="kv">
+    <dt>libziparchive would open</dt><dd>${tri(t.libziparchive_would_open)}</dd>
+    <dt>EOCD</dt><dd>${hex(t.eocd_offset)} · central directory @ ${hex(t.central_dir_offset)} (${t.central_dir_size} bytes) · ${t.cd_records} records walked</dd>
+    <dt>APK Signing Block</dt><dd>${t.signing_block_present ? "present" : "absent"}</dd>
+  </dl>`;
+  renderChecks($("#tamper-checks"), t.checks);
+  $("#tamper-findings").innerHTML = t.findings.length ? t.findings.map(f => `
+    <div class="finding"><span class="fid sev-${esc(f.severity)}">${esc(f.id)}</span><span class="pill ${f.severity === "tamper" ? "bad" : f.severity === "suspicious" ? "warn" : "info"}">${esc(f.severity)}</span>
+      <span class="fentry">${esc(f.entry || "(whole file)")}</span><div class="fdetail">${esc(f.detail)}</div></div>`).join("")
+    : '<span class="tiny">no present-vs-consumed divergence</span>';
+  renderTamperTable();
+}
+$("#tamper-filter").addEventListener("input", renderTamperTable);
+function renderTamperTable() {
+  const t = report.tamper; if (!t.ok) return;
+  const q = $("#tamper-filter").value.toLowerCase();
+  const rows = t.entries.filter(e => !q || e.name.toLowerCase().includes(q));
+  $("#tamper-count").textContent = rows.length + " / " + t.entries.length;
+  const cell = (cd, lfh, present, fmt = (x) => x) => `<td class="num">${fmt(cd)}</td><td class="num ${present ? (cd !== lfh ? "diff" : "") : "dim"}">${present ? fmt(lfh) : "—"}</td>`;
+  $("#tamper-table").innerHTML = `<thead><tr><th>name</th><th class="num">CD rec</th><th class="num">LFH @</th><th>LFH</th>
+      <th class="num">method CD</th><th class="num">LFH</th><th class="num">gpbf CD</th><th class="num">LFH</th><th class="num">crc CD</th><th class="num">LFH</th>
+      <th class="num">csize CD</th><th class="num">LFH</th><th class="num">usize CD</th><th class="num">LFH</th><th>DD</th></tr></thead><tbody>` +
+    rows.map(e => `<tr class="${!e.lfh_present ? "fail" : ""}"><td class="name">${esc(e.name)}</td><td class="num">${hex(e.cd_record_offset)}</td><td class="num">${hex(e.lfh_offset)}</td>
+      <td>${e.lfh_present ? "✓" : '<span class="pill bad">missing</span>'}</td>
+      ${cell(e.cd_method, e.lfh_method, e.lfh_present)}${cell(e.cd_gpbf, e.lfh_gpbf, e.lfh_present, x => hex(x, 4))}${cell(e.cd_crc32, e.lfh_crc32, e.lfh_present, x => hex(x, 8))}
+      ${cell(e.cd_compressed_size, e.lfh_compressed_size, e.lfh_present)}${cell(e.cd_uncompressed_size, e.lfh_uncompressed_size, e.lfh_present)}
+      <td>${e.has_data_descriptor ? "✓" : "·"}</td></tr>`).join("") + "</tbody>";
+}
+
+// Signing block ------------------------------------------------------------
+const SCHEME_NAMES = { 0x7109871a: "APK Signature Scheme v2", 0xf05368c0: "APK Signature Scheme v3", 0x1b93ad61: "APK Signature Scheme v3.1", 0x6dff800d: "SourceStamp v2", 0x42726577: "verity padding" };
+function renderSigning() {
+  const s = report.signing;
+  const el = $("#signing-body");
+  if (!s.ok) { el.innerHTML = `<span class="pill bad">${s.is_zip === false ? "no EOCD — not a ZIP" : "failed"}</span> <span class="err">${esc(s.error)}</span>`; return; }
+  el.innerHTML = `<dl class="kv">
+    <dt>file size</dt><dd>${s.file_size}</dd>
+    <dt>EOCD</dt><dd>${hex(s.eocd_offset)}</dd>
+    <dt>central directory</dt><dd>@ ${hex(s.central_dir_offset)} · ${s.central_dir_size} bytes${s.zip64_locator_present ? ' · <span class="pill warn">zip64 locator present</span>' : ""}</dd>
+    <dt>APK Signing Block</dt><dd>${s.has_signing_block ? `present @ ${hex(s.signing_block_offset)} · ${s.signing_block_size} bytes` : `absent — <span class="tiny">${esc(s.signing_block_error || "")}</span>`}</dd>
+  </dl>` + (s.has_signing_block ? `<table style="margin-top:10px"><thead><tr><th>id</th><th>scheme</th><th class="num">value offset</th><th class="num">value size</th></tr></thead><tbody>` +
+    s.scheme_blocks.map(b => `<tr><td>${hex(b.id, 8)}</td><td>${esc(SCHEME_NAMES[b.id] || "unknown block id")}</td><td class="num">${hex(b.value_offset)}</td><td class="num">${b.value_size}</td></tr>`).join("") + "</tbody></table>" : "") +
+    `<p class="note">A v1 (JAR) signature lives in META-INF/* entries — see the Install gate table (class <code>meta</code>). Whether any scheme actually verifies is apksig's call (apkllm.signing), not this page's.</p>`;
+}
+</script>
+</body>
+</html>
