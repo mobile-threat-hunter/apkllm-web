@@ -1,12 +1,14 @@
 # apkllm-web
 
-[apkllm](https://github.com/MobileThreatHunter/apkllm)'s **container layer** running in
+[apkllm](https://github.com/mobile-threat-hunter/apk-analyzer-for-llm)'s **container layer** running in
 the browser: real AOSP `system/libziparchive` (the device's own ZIP reader) compiled to
 WebAssembly, plus apkllm's install-gate, content-typing and present-vs-consumed tamper
 scan over it. Drop an APK and see what the device would consume — nothing is uploaded.
 
+**Live:** <https://mobile-threat-hunter.github.io/apkllm-web/>
+
 Static page: `index.html` + `worker.js` + `domain.js` + `apkllm.js` / `apkllm.wasm`.
-Same structure as [dexllm-web](https://github.com/MobileThreatHunter/dexllm-web).
+Same structure as [dexllm-web](https://github.com/mobile-threat-hunter/dexllm-web).
 
 ## What it shows
 

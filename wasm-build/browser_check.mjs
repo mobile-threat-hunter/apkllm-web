@@ -42,7 +42,16 @@ await S("Runtime.enable"); await S("Log.enable"); await S("DOM.enable");
 const consoleErrors = [];
 ws.addEventListener("message", e => { const m = JSON.parse(e.data); if (m.method === "Runtime.exceptionThrown") consoleErrors.push(m.params.exceptionDetails.text + " " + (m.params.exceptionDetails.exception?.description || "")); if (m.method === "Log.entryAdded" && m.params.entry.level === "error") consoleErrors.push(m.params.entry.text); });
 const evalJs = async (expr) => { const r = await S("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }); if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails)); return r.result.result.value; };
-const waitFor = async (expr, ms = 30000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await evalJs(expr)) return; await new Promise(r => setTimeout(r, 200)); } throw new Error("timeout waiting for " + expr); };
+// Page.navigate returns before the new document exists, so an early poll can still see
+// about:blank (#status === null → TypeError). Treat a throwing poll as "not yet".
+const waitFor = async (expr, ms = 30000) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    try { if (await evalJs(expr)) return; } catch (_) { /* document not ready yet */ }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  throw new Error("timeout waiting for " + expr);
+};
 
 let failures = 0;
 const fail = (m) => { failures++; console.log("  FAIL:", m); };
