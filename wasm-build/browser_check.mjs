@@ -103,7 +103,7 @@ try {
   if (gateOpened && s.contentRows === 0) fail("content panel empty");
   if (s.tamperChecks !== 2 && !s.signing.includes("not a ZIP")) fail("tamper checks missing");
   // tab badges follow the panel verdicts: a refused container is a red "refused", never blank
-  const badges = JSON.parse(await evalJs(`JSON.stringify(Object.fromEntries(["gate","extract","content","tamper","signing"].map(k => { const el = document.querySelector("#n-" + k); return [k, { t: el.textContent, alert: el.classList.contains("alert") }]; })))`));
+  const badges = JSON.parse(await evalJs(`JSON.stringify(Object.fromEntries(["gate","extract","content","images","tamper","signing"].map(k => { const el = document.querySelector("#n-" + k); return [k, { t: el.textContent, alert: el.classList.contains("alert") }]; })))`));
   console.log("badges:", JSON.stringify(badges));
   for (const [k, b] of Object.entries(badges)) if (!b.t) fail(`tab badge ${k} is blank`);
   if (!gateOpened && !(badges.gate.t === "refused" && badges.gate.alert)) fail("refused container not flagged on the Install gate badge");
@@ -340,8 +340,38 @@ try {
   if (cp.hostileNames && base === "readers" && !(cp.escapedTab && cp.escapedCr && cp.quoted && cp.formula)) fail("hostile names not escaped in the TSV: " + JSON.stringify(cp));
   if (base === "readers" && cp.hostileNames < 4) fail("readers.apk lost its hostile-name fixtures");
   for (const c of cp.clicks) if (!c.ok) fail("click-copy not byte-exact for " + JSON.stringify(c.want));
-  if (SHOT) {   // SHOT = the Tamper scan tab, SHOT with "-extract" before .png = the Extract tab
-    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")]]) {
+  // images gallery: open the tab, let the visible thumbnails load, open the viewer on one
+  await evalJs(`document.querySelector('[data-tab="images"]').click(); true`);
+  const imgTotal = await evalJs(`document.querySelectorAll("#images-grid .itile").length`);
+  const imgExpected = await evalJs(`imgItems.length`);
+  if (s.contentRows && imgTotal !== imgExpected) fail(`images grid ${imgTotal} tiles vs ${imgExpected} items`);
+  if (imgTotal) {
+    // a renderable tile in view must actually be fetched: wait for a finished fetch, not just any non-idle state
+    const wantFetch = await evalJs(`imgItems.some(it => ["idle", "queued", "loading"].includes(it.state))`);
+    // ok / undecodable / err / huge only arise from a fetch; any fetch also sets .read or .err
+    await waitFor(`!imgItems.some(it => it.state === "queued" || it.state === "loading") && (!${wantFetch} || imgItems.some(it => it.read !== null || it.err))`, 30000);
+    const im = JSON.parse(await evalJs(`JSON.stringify((() => { const st = {}; for (const it of imgItems) st[it.state] = (st[it.state] ?? 0) + 1;
+      return { st, imgs: document.querySelectorAll("#images-grid img").length, badge: document.querySelector("#n-images").textContent }; })())`));
+    console.log("images:", JSON.stringify(im));
+    if (im.st.err) fail("image extraction errors: " + im.st.err);
+    if ((im.st.ok ?? 0) !== im.imgs) fail("loaded images not rendered");
+    await evalJs(`document.querySelector("#images-grid .itile").click(); true`);
+    const iv = await evalJs(`document.querySelector("#imgview").classList.contains("on") && document.querySelector("#iv-card dl.kv") !== null`);
+    if (!iv) fail("image viewer did not open");
+    await evalJs(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true`);
+    if (await evalJs(`document.querySelector("#imgview").classList.contains("on")`)) fail("image viewer did not close on Escape");
+    // a new drop with the viewer open must close it at once — its "bytes" would otherwise
+    // extract from the NEW /input.apk under the old report's name (review P1)
+    await evalJs(`document.querySelector("#images-grid .itile").click(); true`);
+    const { result: { root: r2 } } = await S("DOM.getDocument");
+    const { result: { nodeId: n2 } } = await S("DOM.querySelector", { nodeId: r2.nodeId, selector: "#file" });
+    await S("DOM.setFileInputFiles", { files: [APK], nodeId: n2 });
+    await waitFor(`loadGen > reportGen || document.querySelector("#app").classList.contains("on")`, 5000);
+    if (await evalJs(`document.querySelector("#imgview").classList.contains("on")`)) fail("image viewer stayed open during a new load");
+    await waitFor(`reportGen === loadGen && document.querySelector("#app").classList.contains("on")`);
+  }
+  if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" before .png = the Extract / Images tab
+    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
       const { result: { data } } = await S("Page.captureScreenshot", { format: "png" });
       writeFileSync(file, Buffer.from(data, "base64")); console.log("screenshot:", file);

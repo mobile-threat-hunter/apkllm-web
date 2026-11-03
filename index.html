@@ -12,7 +12,7 @@
      built from and -N counts rebuilds against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "644c9e7-4";
+window.__APKLLM_BUILD = "644c9e7-5";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -97,25 +97,27 @@ window.__APKLLM_BUILD = "644c9e7-4";
   main { flex:1; display:flex; flex-direction:column; min-height:0; }
 
   /* ── drop screen (dexllm-web) ────────────────────────────────────── */
-  /* overflow:auto + the card's margin:auto: on a short viewport the card scrolls instead of
-     running under the footer, and is never clipped at the top */
-  #drop { display:flex; align-items:center; justify-content:center; flex:1; min-height:0; overflow:auto; padding:24px; cursor:pointer; }
+  /* dexllm-web's drop screen, same box and position: the card is centred in the space under
+     the header (the footer only appears with the app, so it does not shift the card), the
+     logo is 300px. overflow:auto + the card's margin:auto only matter on a viewport too short
+     for the card — it scrolls instead of being clipped at the top. */
+  #drop { display:flex; align-items:center; justify-content:center; flex:1; min-height:0; overflow:auto; padding:24px; cursor:pointer; text-align:center; }
   #drop input { display:none; }
   #dropcard {
     display:flex; flex-direction:column; align-items:center; gap:10px; margin:auto;
-    width:max-content; max-width:90vw; padding:18px; text-align:center; border:2px dashed var(--line-2);
-    border-radius:14px; color:var(--fg-3); font-family:var(--f-ui);
+    width:max-content; max-width:90vw; padding:18px; border:2px dashed var(--line-2);
+    border-radius:14px; color:var(--fg-3);
     transition:border-color 200ms var(--e-out), background 200ms var(--e-out), box-shadow 200ms var(--e-out);
   }
   #drop:hover #dropcard { border-color:rgba(107,161,255,0.30); }
   #drop.drag #dropcard { border-color:var(--brand); background:var(--hl); color:var(--fg); box-shadow:0 0 0 4px rgba(107,161,255,0.08); }
   #droplogo {
-    /* shrinks with a short viewport so the instructions stay visible */
-    width:min(300px, 72vw, max(120px, calc(100vh - 300px))); aspect-ratio:1/1; border-radius:10px;
+    width:300px; max-width:72vw; aspect-ratio:1/1; border-radius:10px;
     display:block; object-fit:cover; background:#000; pointer-events:none;
   }
-  @media (max-width:720px) { #droplogo { width:min(220px, 72vw, max(120px, calc(100vh - 300px))); } }
-  #dropcard .big { font-size:16px; color:var(--fg); font-weight:600; }
+  @media (max-width:720px) { #droplogo { width:220px; } #drop { margin:14px; } }
+  body:not(:has(#app.on)) footer { display:none; }
+  #dropcard .big { font-size:16px; color:var(--fg); }
   #dropcard .big b { color:var(--brand); }
   #dropcard .drophint { font-size:12px; }
   #dropcard #droploading { display:none; font-size:13px; color:var(--fg); }
@@ -293,6 +295,26 @@ window.__APKLLM_BUILD = "644c9e7-4";
   .finding .fentry { color:var(--fg-3); margin-left:8px; }
   .finding .fdetail { color:var(--fg-2); margin-top:3px; white-space:normal; }
   .err { color:var(--bad); }
+  /* ── images gallery ──────────────────────────────────────────────── */
+  .checker { background-color:#16181e; background-image:conic-gradient(#22252d 25%, transparent 0 50%, #22252d 0 75%, transparent 0); background-size:16px 16px; }
+  .igrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(136px, 1fr)); gap:10px; }
+  .itile { min-width:0; padding:6px; border-radius:9px; cursor:pointer; background:var(--bg-1); box-shadow:inset 0 0 0 1px var(--line-1); transition:box-shadow 160ms var(--e-out); }
+  .itile:hover { box-shadow:inset 0 0 0 1px rgba(107,161,255,0.45); }
+  .itile.flag { box-shadow:inset 0 0 0 1px rgba(245,180,65,0.55); }
+  .itile.fail { box-shadow:inset 0 0 0 1px rgba(255,94,94,0.6); background:rgba(255,94,94,0.05); }
+  .ithumb { height:100px; display:flex; align-items:center; justify-content:center; border-radius:6px; overflow:hidden; }
+  .ithumb img { max-width:100%; max-height:100%; }
+  .ithumb .ph, .bigthumb .ph { font:600 10.5px/1.4 var(--f-ui); color:var(--fg-3); text-align:center; padding:6px; }
+  .ithumb .ph.bad, .bigthumb .ph.bad { color:var(--bad); }
+  .iname { margin-top:5px; font-size:10.5px; line-height:1.35; color:var(--fg-2); word-break:break-all; max-height:2.7em; overflow:hidden; }
+  .imeta { font:10.5px/1.4 var(--f-ui); color:var(--fg-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #imgview { position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(0,0,0,0.78); }
+  #imgview.on { display:flex; }
+  #imgview .card { width:min(980px, 96vw); max-height:94vh; overflow:auto; margin:0; }
+  .bigthumb { display:flex; align-items:center; justify-content:center; min-height:180px; max-height:62vh; overflow:auto; border-radius:8px; margin-bottom:12px; }
+  .bigthumb img { max-width:100%; max-height:62vh; }
+  .bigthumb img.px { image-rendering:pixelated; }
+  #iv-status { display:block; margin-top:8px; }
   footer { padding:9px 22px; color:var(--fg-3); font:11px var(--f-ui); background:linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); box-shadow:inset 0 1px 0 var(--line-1); }
   footer code { color:var(--fg-2); }
   @media (max-width:720px) { .checks li { grid-template-columns:1fr; } .toolbar input[type=search] { width:100%; } header { padding:10px 14px; } .panel { padding:12px 12px 32px; } }
@@ -308,9 +330,9 @@ window.__APKLLM_BUILD = "644c9e7-4";
 <main>
 <label id="drop" for="file">
   <div id="dropcard">
-    <img id="droplogo" src="apkllm_logo.png" alt="APKLLM">
+    <img id="droplogo" alt="APKLLM">
     <div class="big">Drop an <b>.apk</b> here</div>
-    <div class="drophint">or click to choose — nothing is uploaded, the container is read locally by the device's own ZIP reader</div>
+    <div class="drophint">or click to choose a file — nothing is uploaded, the container is read locally</div>
     <div id="droploading"><span class="spin"></span>reading container…</div>
   </div>
   <input id="file" type="file" accept=".apk,.zip,.jar,.apks,.xapk,application/octet-stream">
@@ -327,6 +349,7 @@ window.__APKLLM_BUILD = "644c9e7-4";
     <div class="tab on" data-tab="gate">Install gate<span class="n" id="n-gate"></span></div>
     <div class="tab" data-tab="extract">Extract<span class="n" id="n-extract"></span></div>
     <div class="tab" data-tab="content">Content<span class="n" id="n-content"></span></div>
+    <div class="tab" data-tab="images">Images<span class="n" id="n-images"></span></div>
     <div class="tab" data-tab="tamper">Tamper scan<span class="n" id="n-tamper"></span></div>
     <div class="tab" data-tab="signing">Signing block<span class="n" id="n-signing"></span></div>
   </div>
@@ -422,6 +445,20 @@ window.__APKLLM_BUILD = "644c9e7-4";
     </div>
   </section>
 
+  <!-- ── Images ───────────────────────────────────────────────────── -->
+  <section class="panel" id="panel-images">
+    <div class="card">
+      <h2>Images <span class="tiny">(entries whose bytes are an image by magic, plus entries NAMED like an image whose bytes are not — each rendered from its own device reader's output)</span><button class="copybtn" type="button" data-copy="images" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div class="toolbar">
+        <input type="search" id="images-filter" placeholder="filter by name…">
+        <span id="images-chips"></span>
+        <span class="count" id="images-count"></span>
+      </div>
+      <div id="images-note"></div>
+      <div class="igrid" id="images-grid"></div>
+    </div>
+  </section>
+
   <!-- ── Tamper scan ──────────────────────────────────────────────── -->
   <section class="panel" id="panel-tamper">
     <div class="card">
@@ -454,6 +491,7 @@ window.__APKLLM_BUILD = "644c9e7-4";
     </div>
   </section>
 </div>
+<div id="imgview"><div class="card" id="iv-card"></div></div>
 </main>
 <footer>apkllm-web · engine build <span id="buildpin"></span> · real AOSP <code>system/libziparchive</code> (android16-qpr2-release) + apkllm native/container · analyzer, not gatekeeper: verdicts are informational, every entry is shown</footer>
 
@@ -467,6 +505,7 @@ const tri = (v) => v === true ? '<span class="pill ok">true</span>' : v === fals
 const okPill = (ok, yes = "ok", no = "fail", unk = "indeterminate") =>
   ok === true ? `<span class="pill ok">${yes}</span>` : ok === false ? `<span class="pill bad">${no}</span>` : `<span class="pill warn">${unk}</span>`;
 $("#buildpin").textContent = window.__APKLLM_BUILD;
+$("#droplogo").src = "apkllm_logo.png?v=" + window.__APKLLM_BUILD;   // same file name across logo changes: the pin busts the cache
 $("#ver code").textContent = window.__APKLLM_BUILD;
 const statusEl = $("#status");
 
@@ -507,6 +546,7 @@ let report = null;   // { file, tamper, signing, content, gate }
 // gate result on the second file's report (review finding ADV-2). Every await checks
 // that it still belongs to the newest load; stale results are dropped.
 let loadGen = 0;
+let reportGen = 0;   // the loadGen whose APK `report` describes; ≠ loadGen while a new load is in flight
 
 async function loadFile(file) {
   const gen = ++loadGen;
@@ -517,7 +557,8 @@ async function loadFile(file) {
   // a new file starts with every filter/chip at its default (Content chips reset in renderContent)
   gateClassOn = new Set(CLASS_ORDER);
   xReaderOn = null; xSel = new Set(); setXStatus("");
-  for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#tamper-filter"]) $(id).value = "";
+  stopImages();
+  for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#images-filter", "#tamper-filter"]) $(id).value = "";
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (gen !== loadGen) return;
@@ -526,7 +567,7 @@ async function loadFile(file) {
     const next = { file: { name: file.name, size: file.size }, ...r, gate: null };
     next.gate = await wcall({ type: "gate", ...gateParams() });
     if (gen !== loadGen) return;
-    report = next;
+    report = next; reportGen = gen;
     renderAll();
     drop.classList.add("hidden"); $("#app").classList.add("on");
     statusEl.innerHTML = "engine ready · <b>" + esc(file.name) + "</b>";
@@ -566,7 +607,7 @@ async function rerunGate() {
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
-function renderAll() { renderFilebar(); renderGate(); renderExtract(); renderContent(); renderTamper(); renderSigning(); }
+function renderAll() { renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -681,7 +722,9 @@ function saveBlob(blob, filename) {
 // is dropped — no stale download or status.
 const extracting = new Set();
 async function extractAndSave(index, el, statusEl) {
-  if (extracting.has(index) || !report?.gate.ok) return;
+  // while a newer drop is loading, /input.apk may already hold the NEW file: an extraction
+  // requested now would pair this report's name with the other APK's bytes
+  if (extracting.has(index) || !report?.gate.ok || reportGen !== loadGen) return;
   const gen = loadGen, cur = report, name = cur.gate.extract.entries[index]?.name ?? "?";
   extracting.add(index); el.classList.add("busy"); if (el.tagName === "BUTTON") el.disabled = true;
   const live = () => gen === loadGen && report === cur;
@@ -877,6 +920,339 @@ function showHead(i, tr) {
   $("#content-hex").innerHTML = `<div class="hexhead"><span class="tiny">${esc(h.name)} — first ${b.length} bytes as its ${h.disposition} reader produced them${h.complete ? " (whole entry)" : ""}</span><button class="copybtn" type="button" data-copy="content-hex" title="Copy this hex dump as text">⧉ copy</button></div><pre class="hex">${esc(out) || "(empty)"}</pre>`;
 }
 
+// Images -------------------------------------------------------------------
+// The gallery is the Content tab's classification seen as pictures: an entry is listed when
+// its device-produced bytes are an image by magic (category "image"), or when its NAME claims
+// an image (extension) and its bytes are something else — a payload hidden under a .png is
+// shown as such, never dropped. Pixels come only from extractEntry (the entry's own mapped
+// reader, exactly what "bytes" downloads); the Blob's MIME type is taken from the magic, never
+// from the name. Thumbnails load lazily — only tiles in view of the open tab, a few at a time,
+// and a tile scrolled away before its turn leaves the queue.
+const IMG_MIME = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", ico: "image/x-icon", avif: "image/avif" };
+const IMG_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "heic", "avif"]);   // EXT_EXPECTS keys that expect an image
+const IMG_AUTO_MAX = 16 * 1024 * 1024;     // larger entries load on request
+const IMG_KEEP_MAX = 256 * 1024;           // an entry up to this size keeps its own bytes as the thumbnail (animation, crisp icons)…
+const IMG_KEEP_BUDGET = 128 * 1024 * 1024; // …while the kept total stays under this; anything else becomes a small canvas thumbnail
+const IMG_THUMB_EDGE = 200;
+const IMG_MAX_PIXELS = 24 * 1024 * 1024;   // never decode a bitmap bigger than this (checked on the header first)
+const IMG_PARALLEL = 3;
+const imgExtOf = (name) => { const b = name.slice(name.lastIndexOf("/") + 1), d = b.lastIndexOf("."); return d > 0 ? b.slice(d + 1).toLowerCase() : ""; };
+let imgItems = [], imgTypeOn = null, imgRun = null, imgObserver = null, imgTiles = new Map(), imgGridDirty = false;
+const imgKind = (it) => it.isImage ? it.ctype : it.state === "unreadable" ? "unreadable" : it.state === "empty" ? "empty" : it.state === "unaddressable" ? "unaddressable" : "not an image";
+
+function stopImages() {   // a new drop: nothing queued for the old APK is sent to the worker any more
+  if (imgRun) imgRun.queue.length = 0;
+  closeImage();
+}
+function renderImages() {
+  // a new report: drop the previous run (its late results are ignored) and its object URLs
+  if (imgRun) { imgRun.queue.length = 0; for (const it of imgRun.items) if (it.url) URL.revokeObjectURL(it.url); }
+  imgObserver?.disconnect();
+  closeImage();
+  imgItems = []; imgTypeOn = null; imgTiles = new Map();
+  imgRun = { gen: loadGen, report, items: imgItems, queue: [], busy: 0, kept: 0 };
+  const c = report.content, n = $("#n-images");
+  n.classList.remove("alert", "warn");
+  if (!c.ok) {
+    $("#images-note").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(c.error)}</span>`;
+    $("#images-grid").innerHTML = ""; $("#images-chips").innerHTML = ""; $("#images-count").textContent = "";
+    n.textContent = "refused"; n.classList.add("alert");
+    return;
+  }
+  const g = report.gate;
+  // names cross the binding as decoded text: two raw names that decode alike would make the
+  // by-name lookup return one entry's bytes for both (the worker's bundle/single refuse it too)
+  const nameCount = new Map();
+  for (const e of c.entries) nameCount.set(e.name, (nameCount.get(e.name) ?? 0) + 1);
+  c.entries.forEach((e, i) => {
+    const ext = imgExtOf(e.name), isImage = e.category === "image";
+    if (!isImage && !IMG_EXTS.has(ext)) return;
+    // gate and content enumerate the same libziparchive order; fall back to a name match
+    const gi = g.ok && g.entries[i]?.name === e.name ? i : g.ok && nameCount.get(e.name) === 1 ? g.entries.findIndex(x => x.name === e.name) : -1;
+    const size = gi >= 0 ? g.entries[gi].uncompressed_size : null;
+    imgItems.push({ i, gi, name: e.name, ctype: e.content_type, ext, isImage, extMismatch: e.extension_mismatch,
+      size, mime: isImage ? IMG_MIME[e.content_type] ?? null : null, read: null, headRead: e.disposition,
+      state: !isImage ? (e.extension_mismatch === null ? "unreadable" : size === 0 ? "empty" : "disguised")
+        : nameCount.get(e.name) > 1 ? "unaddressable"
+        : !IMG_MIME[e.content_type] ? "nodecode" : size > IMG_AUTO_MAX ? "large" : "idle" });
+  });
+  const types = {};
+  for (const it of imgItems) { const k = imgKind(it); types[k] = (types[k] ?? 0) + 1; }
+  imgTypeOn = new Set(Object.keys(types));
+  $("#images-chips").innerHTML = Object.entries(types).sort((a, b) => b[1] - a[1]).map(([k, v]) =>
+    `<span class="chip on" data-t="${esc(k)}">${esc(k)}<span class="n">${v}</span></span>`).join(" ");
+  for (const ch of $("#images-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
+    const k = ch.dataset.t; if (imgTypeOn.has(k)) imgTypeOn.delete(k); else imgTypeOn.add(k);
+    ch.classList.toggle("on"); renderImageGrid();
+  });
+  imgSummary();
+  imgObserver = new IntersectionObserver((xs) => {
+    for (const x of xs) {
+      const k = Number(x.target.dataset.k);
+      if (x.isIntersecting) queueImage(k); else unqueueImage(k);
+    }
+  }, { root: $("#panel-images"), rootMargin: "300px" });
+  // the grid itself is built when the tab is first shown — a big APK pays nothing until then
+  imgGridDirty = true; $("#images-grid").innerHTML = ""; $("#images-count").textContent = imgItems.length + " / " + imgItems.length;
+  if ($("#panel-images").classList.contains("on")) renderImageGrid();
+}
+let imgFilterT = 0;
+$("#images-filter").addEventListener("input", () => { clearTimeout(imgFilterT); imgFilterT = setTimeout(() => { if (report?.content.ok) renderImageGrid(); }, 150); });
+function renderImageGrid() {
+  imgGridDirty = false;
+  imgObserver?.disconnect();
+  for (const k of [...(imgRun?.queue ?? [])]) unqueueImage(k);   // re-queued as the new tiles come into view
+  const q = $("#images-filter").value.toLowerCase();
+  const shown = imgItems.map((it, k) => ({ it, k })).filter(({ it }) => imgTypeOn.has(imgKind(it)) && (!q || it.name.toLowerCase().includes(q)));
+  $("#images-count").textContent = shown.length + " / " + imgItems.length;
+  $("#images-grid").innerHTML = shown.map(({ k }) => `<div class="itile" data-k="${k}"></div>`).join("");
+  imgTiles = new Map();
+  for (const el of $("#images-grid").children) {
+    const k = Number(el.dataset.k), it = imgItems[k];
+    imgTiles.set(k, el); el.title = it.name; paintTile(el, it);
+    if (it.state === "idle") imgObserver.observe(el);
+  }
+}
+// tab badge + note pills; re-run when a fetch reveals a state (an invalid-UTF-8 name is only
+// found unaddressable when its lookup misses)
+function imgSummary() {
+  const n = $("#n-images"), count = (st) => imgItems.filter(it => it.state === st).length;
+  const disguised = count("disguised"), unreadable = count("unreadable"), unaddr = count("unaddressable");
+  n.textContent = imgItems.length;
+  n.classList.toggle("alert", disguised > 0); n.classList.toggle("warn", !disguised && (unreadable > 0 || unaddr > 0));
+  const notes = [];
+  if (disguised) notes.push(`<span class="pill bad">${disguised} named like an image, bytes are not</span>`);
+  if (unreadable) notes.push(`<span class="pill warn">${unreadable} named like an image, its reader produced no bytes</span>`);
+  if (unaddr) notes.push(`<span class="pill warn">${unaddr} not addressable by name (invalid UTF-8 / names decode alike)</span>`);
+  const em = imgItems.filter(it => it.isImage && it.extMismatch === true).length;
+  if (em) notes.push(`<span class="pill warn">${em} image${em === 1 ? "" : "s"} under a name that expects other content</span>`);
+  if (!imgItems.length) notes.push('<span class="tiny">no entry is an image by magic or by name</span>');
+  $("#images-note").innerHTML = notes.length ? `<div class="toolbar">${notes.join(" ")}</div>` : "";
+}
+// what a tile / the viewer shows instead of pixels
+function imgPlaceholder(it) {
+  switch (it.state) {
+    case "idle": case "queued": case "loading": return '<span class="ph"><span class="spin"></span></span>';
+    case "large": return `<span class="ph">${fmtSize(it.size)} — click to load</span>`;
+    case "nodecode": return `<span class="ph">${esc(it.ctype)}<br>not renderable in a browser</span>`;
+    case "unreadable": return `<span class="ph">named .${esc(it.ext)}<br>reader: ${esc(it.headRead)} — no bytes</span>`;
+    case "unaddressable": return '<span class="ph">another entry\'s name decodes the same — not addressable by name</span>';
+    case "disguised": return `<span class="ph bad">${esc(it.ctype)} bytes<br>named .${esc(it.ext)}</span>`;
+    case "decodefail": return `<span class="ph">${esc(it.ctype)} · ${it.w}×${it.h}<br>decode failed — click to retry</span>`;
+    case "undecodable": return `<span class="ph bad">${esc(it.ctype)} magic, but the browser cannot decode it</span>`;
+    case "huge": return `<span class="ph">${it.w}×${it.h}<br>too many pixels to draw</span>`;
+    case "empty": return '<span class="ph">empty entry (0 bytes)</span>';
+    default: return `<span class="ph bad">extract failed<br>${esc(it.err ?? "")}</span>`;
+  }
+}
+function imgMeta(it) {
+  const parts = [it.isImage ? it.ctype : it.state === "disguised" ? "≠ image" : it.state];
+  if (it.w != null) parts.push(`${it.w}×${it.h}`);
+  if (it.size != null) parts.push(fmtSize(it.size));
+  return parts.join(" · ");
+}
+function paintTile(el, it) {
+  el.className = "itile" + (it.state === "disguised" || it.state === "err" || it.state === "undecodable" ? " fail"
+    : it.extMismatch === true || ["unreadable", "unaddressable", "decodefail", "huge"].includes(it.state) ? " flag" : "");
+  const thumb = it.state === "ok" ? `<img src="${it.url}" alt="">` : imgPlaceholder(it);
+  el.innerHTML = `<div class="ithumb checker">${thumb}</div><div class="iname">${esc(it.name)}</div>
+    <div class="imeta">${esc(imgMeta(it))}${it.extMismatch === true && it.isImage ? ' <span class="pill warn">ext ≠ content</span>' : ""}</div>`;
+}
+function repaint(k) {
+  const el = imgTiles.get(k); if (el) paintTile(el, imgItems[k]);
+  if (ivOpen === k) { paintViewerBody(k); const it = imgItems[k]; if (it.state === "ok" && !it.full && !ivUrl) loadFull(k); }
+}
+function queueImage(k) {
+  const run = imgRun, it = run?.items[k];
+  if (!it || (it.state !== "idle" && it.state !== "large" && it.state !== "decodefail")) return;
+  it.state = "queued"; run.queue.push(k); repaint(k); pumpImages(run);
+}
+function unqueueImage(k) {   // scrolled away (or the grid was rebuilt) before its turn
+  const run = imgRun, it = run?.items[k];
+  if (!it || it.state !== "queued" || ivOpen === k || it.requested) return;
+  const at = run.queue.indexOf(k); if (at >= 0) run.queue.splice(at, 1);
+  it.state = it.size > IMG_AUTO_MAX ? "large" : "idle"; repaint(k);
+}
+const isUnaddressable = (error) => /^FindEntry: Entry not found/.test(error || "");
+// width × height from the header, read BEFORE anything is decoded, so a small file declaring a
+// huge bitmap is never handed to the decoder (null = not parsed: AVIF, odd variants)
+function imgDims(ctype, b) {
+  const u16 = (o) => b[o] | b[o + 1] << 8, u16be = (o) => b[o] << 8 | b[o + 1], u24 = (o) => b[o] | b[o + 1] << 8 | b[o + 2] << 16;
+  const u32be = (o) => (b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3]) >>> 0;
+  try {
+    if (ctype === "png") return b.length >= 24 && String.fromCharCode(b[12], b[13], b[14], b[15]) === "IHDR" ? [u32be(16), u32be(20)] : null;
+    if (ctype === "gif" && b.length >= 13) {
+      // the decoder grows the canvas to fit the first frame, so the logical screen alone can lie
+      let w = u16(6), h = u16(8), o = 13;
+      if (b[10] & 0x80) o += 3 << ((b[10] & 7) + 1);           // global colour table
+      while (o < b.length && b[o] === 0x21) {                   // extension blocks
+        o += 2;
+        while (o < b.length && b[o]) o += b[o] + 1;
+        o++;
+      }
+      if (o + 9 >= b.length || b[o] !== 0x2c) return null;      // no image descriptor: not parsed
+      return [Math.max(w, u16(o + 1) + u16(o + 5)), Math.max(h, u16(o + 3) + u16(o + 7))];
+    }
+    if (ctype === "bmp" && b.length >= 26) {
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      if (dv.getUint32(14, true) === 12) return [u16(18), u16(20)];   // OS/2 BITMAPCOREHEADER
+      return [Math.abs(dv.getInt32(18, true)), Math.abs(dv.getInt32(22, true))];
+    }
+    if (ctype === "ico" && b.length >= 22) {
+      // the browser shows the LARGEST directory entry; a 0 byte means 256
+      let w = 0, h = 0;
+      for (let i = 0, n = u16(4); i < n && 6 + i * 16 + 2 <= b.length; i++) { w = Math.max(w, b[6 + i * 16] || 256); h = Math.max(h, b[7 + i * 16] || 256); }
+      return w && h ? [w, h] : null;
+    }
+    if (ctype === "webp" && b.length >= 30) {
+      const fcc = String.fromCharCode(b[12], b[13], b[14], b[15]);
+      if (fcc === "VP8X") return [u24(24) + 1, u24(27) + 1];
+      if (fcc === "VP8L") { const v = b[21] | b[22] << 8 | b[23] << 16 | b[24] << 24; return [(v & 0x3fff) + 1, ((v >>> 14) & 0x3fff) + 1]; }
+      if (fcc === "VP8 ") return [u16(26) & 0x3fff, u16(28) & 0x3fff];
+    }
+    if (ctype === "jpeg") {
+      for (let o = 2; o + 9 < b.length;) {
+        if (b[o] !== 0xff) { o++; continue; }                     // stray bytes before a marker: libjpeg skips them
+        const m = b[o + 1];
+        if (m === 0xff) { o++; continue; }
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return [u16be(o + 7), u16be(o + 5)];
+        if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { o += 2; continue; }
+        o += 2 + u16be(o + 2);
+      }
+    }
+  } catch (_) { /* fall through */ }
+  return null;
+}
+let imgDecodeChain = Promise.resolve();   // one decode at a time: concurrent decodes share the browser's image budget
+const IMG_KEEP_PIXELS = 512 * 512;        // a kept original must also be small as a bitmap
+// decoded image → what the tile keeps: its own bytes when small (and within the kept budget),
+// otherwise a ≤200px canvas thumbnail, so a gallery of padded "PNGs" cannot pin the tab's memory
+function makeThumb(run, it, data) {
+  let dims = imgDims(it.ctype, data);
+  if (dims && (!dims[0] || !dims[1])) dims = null;   // a zero dimension is not a parse
+  if (dims) { [it.w, it.h] = dims; if (it.w * it.h > IMG_MAX_PIXELS) { it.state = "huge"; return Promise.resolve(); } }
+  const job = imgDecodeChain.then(() => run === imgRun ? decodeThumb(run, it, data, !!dims) : undefined);
+  imgDecodeChain = job.catch(() => {});
+  return job;
+}
+async function decodeThumb(run, it, data, headerOk) {
+  const url = URL.createObjectURL(new Blob([data], { type: it.mime }));
+  const probe = new Image();
+  probe.src = url;
+  // decode(), not onload: onload fires once the header is parsed, so a truncated or
+  // corrupt body would pass as a blank picture with plausible dimensions
+  // a header that parsed but a body that will not decode may be the browser's resource limit
+  // rather than broken bytes: "decodefail" is retryable (click), "undecodable" is not
+  try { await probe.decode(); } catch (_) { URL.revokeObjectURL(url); it.state = headerOk ? "decodefail" : "undecodable"; return; }
+  it.w = probe.naturalWidth; it.h = probe.naturalHeight;
+  if (it.w * it.h > IMG_MAX_PIXELS) { URL.revokeObjectURL(url); it.state = "huge"; return; }
+  if (data.length <= IMG_KEEP_MAX && it.w * it.h <= IMG_KEEP_PIXELS && run.kept + data.length <= IMG_KEEP_BUDGET) { run.kept += data.length; it.url = url; it.full = true; it.state = "ok"; return; }
+  const f = Math.min(1, IMG_THUMB_EDGE / Math.max(it.w, it.h, 1));
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(it.w * f)); cv.height = Math.max(1, Math.round(it.h * f));
+  cv.getContext("2d").drawImage(probe, 0, 0, cv.width, cv.height);
+  URL.revokeObjectURL(url);
+  const blob = await new Promise(r => cv.toBlob(r, "image/png"));
+  if (!blob) { it.state = "undecodable"; return; }
+  it.url = URL.createObjectURL(blob); it.full = false; it.state = "ok";
+}
+function pumpImages(run) {
+  while (run === imgRun && run.gen === loadGen && run.busy < IMG_PARALLEL && run.queue.length) {
+    const k = run.queue.shift(), it = run.items[k];
+    it.state = "loading"; run.busy++;
+    imgObserver?.unobserve(imgTiles.get(k) ?? document.body);
+    wcall({ type: "extract", name: it.name }).then(r => {
+      if (run !== imgRun || run.gen !== loadGen) return;   // another APK replaced this one
+      if (!r.ok) { it.state = isUnaddressable(r.error) ? "unaddressable" : "err"; it.err = r.error; if (it.state === "unaddressable") imgSummary(); return; }
+      it.read = r.disposition; it.size = r.data.length;
+      if (!r.data.length) { it.state = "empty"; return; }
+      return makeThumb(run, it, r.data);
+    }).catch(e => { if (run === imgRun) { it.state = "err"; it.err = e.message; } })
+      .finally(() => {
+        run.busy--;
+        if (run !== imgRun) { if (it.url) URL.revokeObjectURL(it.url); return; }
+        if (it.state === "loading") it.state = "idle";   // result dropped by a newer drop
+        repaint(k); pumpImages(run);
+      });
+  }
+}
+$("#images-grid").addEventListener("click", (e) => {
+  const el = e.target.closest(".itile"); if (!el) return;
+  openImage(Number(el.dataset.k));
+});
+for (const t of document.querySelectorAll('#tabs .tab[data-tab="images"]')) t.addEventListener("click", () => { if (imgGridDirty && report?.content.ok) renderImageGrid(); });
+
+// viewer: the picture at a readable zoom + the entry's facts; "bytes" downloads exactly these bytes.
+// A tile that only holds a canvas thumbnail is re-extracted (same reader) for the full picture.
+let ivOpen = null, ivUrl = null, ivSeq = 0, ivPending = false;
+function openImage(k) {
+  closeImage();
+  const it = imgItems[k];
+  ivOpen = k; paintViewer(k); $("#imgview").classList.add("on");
+  if (it.state === "idle" || it.state === "decodefail") { it.requested = true; queueImage(k); }
+  if (it.state === "ok" && !it.full) loadFull(k);
+}
+function closeImage() {
+  ivOpen = null; ivSeq++; ivPending = false;
+  if (ivUrl) { URL.revokeObjectURL(ivUrl); ivUrl = null; }
+  $("#imgview").classList.remove("on"); $("#iv-card").innerHTML = "";
+}
+async function loadFull(k) {
+  if (ivPending) return;
+  ivPending = true;
+  const seq = ++ivSeq, run = imgRun, it = imgItems[k];
+  try {
+    const r = await wcall({ type: "extract", name: it.name });
+    if (seq !== ivSeq || run !== imgRun || run.gen !== loadGen || !r.ok) return;
+    if (it.w * it.h > IMG_MAX_PIXELS) return;
+    ivUrl = URL.createObjectURL(new Blob([r.data], { type: it.mime }));
+    paintViewerBody(k);
+  } catch (_) { /* the thumbnail stays */ }
+  finally { if (seq === ivSeq) ivPending = false; }
+}
+function paintViewer(k) {
+  const it = imgItems[k];
+  $("#iv-card").innerHTML = `<h2>Image<button type="button" id="iv-close" style="margin-left:auto" title="Close (Esc)">✕ close</button></h2>
+    <div id="iv-body"></div>
+    <div class="toolbar" style="margin-top:12px">
+      ${it.gi >= 0 ? `<button id="iv-bytes" title="${BYTES_TITLE}">bytes</button>` : ""}
+      <button id="iv-load" style="display:none">load</button>
+      <span class="count" id="iv-status"></span>
+    </div>
+    ${!it.isImage ? '<p class="note">The Content tab\'s hex view shows this entry\'s first 512 device-produced bytes.</p>' : ""}`;
+  $("#iv-close").addEventListener("click", closeImage);
+  $("#iv-bytes")?.addEventListener("click", (e) => extractAndSave(it.gi, e.currentTarget, $("#iv-status")));
+  $("#iv-load").addEventListener("click", () => { imgItems[k].requested = true; queueImage(k); });
+  paintViewerBody(k);
+}
+// only the picture + facts: the toolbar (and a running download's status) survives a repaint
+function paintViewerBody(k) {
+  const it = imgItems[k], body = $("#iv-body"); if (!body) return;
+  let pic = imgPlaceholder(it);
+  const src = ivUrl ?? (it.state === "ok" && it.full ? it.url : null);
+  if (src || it.state === "ok") {
+    const zoom = Math.max(1, Math.min(8, Math.floor(256 / Math.max(it.w, it.h, 1))));
+    pic = `<img src="${src ?? it.url}" alt=""${zoom > 1 ? ` class="px" style="width:${it.w * zoom}px"` : src ? "" : ` style="width:${Math.min(it.w, 900)}px"`}>`;
+  }
+  const same = !it.isImage
+    ? (it.state === "disguised" ? '<span class="pill bad">named like an image, bytes are not</span>' : `<span class="pill na">${esc(it.state)}</span>`)
+    : it.extMismatch === true ? '<span class="pill warn">extension ≠ content</span>'
+    : IMG_EXTS.has(it.ext) ? '<span class="pill ok">consistent</span>' : `<span class="pill na">no expectation for .${esc(it.ext || "∅")}</span>`;
+  body.innerHTML = `<div class="bigthumb checker">${pic}</div>
+    <dl class="kv">
+      <dt>entry</dt><dd><span class="copyable" data-src="images" data-i="${k}" title="click to copy the entry name">${esc(it.name)}</span></dd>
+      <dt>content (magic)</dt><dd>${esc(it.ctype)}${it.mime ? ` <span class="tiny">rendered as ${it.mime}</span>` : ""}</dd>
+      <dt>name vs bytes</dt><dd>${same} <span class="tiny">.${esc(it.ext || "∅")}</span></dd>
+      <dt>dimensions</dt><dd>${it.w != null ? `${it.w} × ${it.h}${/\.9\.png$/i.test(it.name) ? ' <span class="tiny">9-patch (1px stretch/padding border included)</span>' : ""}` : "—"}</dd>
+      <dt>size</dt><dd>${it.size != null ? `${it.size} bytes (${fmtSize(it.size)})` : "—"}</dd>
+      <dt>read</dt><dd>${it.read ? esc(it.read) + " by its own reader" : `head: ${esc(it.headRead)}`}</dd>
+      ${it.err ? `<dt>error</dt><dd class="err">${esc(it.err)}</dd>` : ""}
+    </dl>`;
+  const ld = $("#iv-load"); if (ld) ld.style.display = it.state === "large" ? "" : "none";
+}
+$("#imgview").addEventListener("click", (e) => { if (e.target.id === "imgview") closeImage(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && ivOpen !== null) closeImage(); });
+
 // Copy ---------------------------------------------------------------------
 // dexllm-web's copy buttons: each card copies its WHOLE dataset (every entry, not just the
 // filtered view — analyzer, not gatekeeper) as tab-separated text; a single item (entry
@@ -943,6 +1319,8 @@ const COPY = {
     if (!h) return "";
     return `entry\t${cell(h.name)}\nread\t${h.disposition}\nbytes\t${h.head.length}${h.complete ? " (whole entry)" : ""}\n` + ($("#content-hex pre.hex")?.textContent || "");
   },
+  "images": () => report.content.ok ? tsv(["#", "name", "content_type", "extension", "bytes_are_image", "extension_mismatch", "size", "width", "height", "read", "status", "error"],
+    imgItems.map(it => [it.i, it.name, it.ctype, it.ext, it.isImage, tri3(it.extMismatch), it.size ?? "", it.w ?? "", it.h ?? "", it.read ?? "", it.state, it.err ?? ""])) : unavailable(report.content, "unavailable"),
   "tamper-head": () => report.tamper.ok ? kvText($("#tamper-head")) : unavailable(report.tamper, "raw walk failed"),
   "tamper-checks": () => report.tamper.ok ? checksText(report.tamper.checks) : unavailable(report.tamper, "raw walk failed"),
   "tamper-findings": () => report.tamper.ok ? tsv(["severity", "id", "entry", "detail"], report.tamper.findings.map(f => [f.severity, f.id, f.entry || "(whole file)", f.detail])) : unavailable(report.tamper, "raw walk failed"),
@@ -955,9 +1333,9 @@ const COPY = {
 const ITEM = {
   gate: (i) => report.gate.entries?.[i]?.name, extract: (i) => report.gate.extract?.entries?.[i]?.name,
   content: (i) => report.content.entries?.[i]?.name, tamper: (i) => report.tamper.entries?.[i]?.name,
-  finding: (i) => report.tamper.findings?.[i]?.entry,
+  finding: (i) => report.tamper.findings?.[i]?.entry, images: (k) => imgItems[k]?.name,
 };
-const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", tamper: "Tamper scan", signing: "Signing block" };
+const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", images: "Images", tamper: "Tamper scan", signing: "Signing block" };
 let pendingCopy = 0;
 // one delegated listener: card buttons + click-to-copy items (rows re-render, so no per-node wiring)
 document.addEventListener("click", (e) => {
