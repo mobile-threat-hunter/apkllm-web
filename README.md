@@ -35,24 +35,33 @@ verdict stays conditional (`needs_manifest`), never guessed.
 highlighted, never hidden; a container libziparchive refuses is still walked by the
 tamper scan; every entry's device-faithful bytes can be saved, one at a time or as a bundle.
 
-**Extract bundle.** `<apk>.extracted.zip` holds `files/<entry name>` for every entry its
-reader delivered, plus `apkllm-extract.json`: per entry the original name, output path,
-class, reader, planned disposition, what the reader actually did (`stored` / `inflate` /
-`lenient_stored`), size and sha256 — or `ok: false` with a failure cause and the engine's
-error: `reader_rejected` (its strict reader rejects a forged method; the device would not
-load it either), `name_unaddressable` (an entry name that is not valid UTF-8, or that
-decodes like another entry's — names cross apkllm's binding as U+FFFD-replaced text, so
-the by-name lookup cannot reach it; native Python behaves the same) or `extract_failed` (apkllm's own guards — 512 MiB per entry,
-implausible deflate expansion — or a corrupt stream). Entry names are attacker-controlled,
-so output paths are made safe for Linux, macOS and Windows: `..`, control/reserved
-characters, `~` (NTFS 8.3 aliases), trailing dots/spaces and DOS device stems are
-%-escaped, a segment over 200 bytes is cut with a `~hash` suffix, a path over 1024 bytes is
-flattened to `%LONGPATH~hash/<leaf>`, and a path that clashes with an earlier one
-(case-folded incl. σ/ς, NFC/NFD, ignorable code points, file-vs-directory) goes to
-`collisions/<n>/`. Directory entries (`res/`) become directory records. The zip is STORED
-packaging built in the worker, capped at 65 533 entries and 1 GiB of extracted bytes;
-dropping another file (or **cancel**) stops a running bundle. Windows Explorer's built-in
-unzip stops at 260-character paths — use 7-Zip for deep trees.
+**Extract naming — apkllm's convention** (as `apkllm.unwrap`: `{md5}.apk` + `{input md5}.json`).
+Entry names are attacker-controlled, so no output file is ever named after one: an extracted
+entry is `{md5}.bin` of its **content**; identical content is one file, an md5 collision
+(same md5, different sha256) becomes `{md5}.{sha256}.bin`, never an overwrite. The JSON report
+maps every entry name → file.
+
+- **Bundle** (extract selected / all) → `<input md5>.extracted.zip` = flat `{md5}.bin` files +
+  `<input md5>.json`: the input (name, size, md5, sha256), the manifest inputs, and per entry
+  the original name, `file`, md5, sha256, size, class, reader, planned disposition and what
+  the reader actually did (`stored` / `inflate` / `lenient_stored`) — or `ok: false` with a
+  failure cause and the engine's error: `reader_rejected` (its strict reader rejects a forged
+  method; the device would not load it either), `name_unaddressable` (an entry name that is
+  not valid UTF-8, or that decodes like another entry's — names cross apkllm's binding as
+  U+FFFD-replaced text, so the by-name lookup cannot reach it; native Python behaves the same)
+  or `extract_failed` (apkllm's own guards — 512 MiB per entry, implausible deflate expansion —
+  or a corrupt stream). Directory entries (`res/`) are listed, with no file.
+- **One entry** (`bytes`, or double-click its row) → `{md5}.zip` = `{md5}.bin` + `{md5}.json`,
+  named exactly as the bundle would name that content: every other entry that could share the
+  md5 (same size) is checked, and of different contents sharing an md5 the first in archive order
+  keeps `{md5}`, the others get `{md5}.{sha256}` (zip, file and JSON alike). The JSON lists every
+  entry with that content, so two downloads of identical content yield the same file and the
+  same JSON — unzipping both into one folder never loses a mapping or overwrites other bytes.
+
+The zips are STORED packaging built in the worker (capped at 65 533 entries and 1 GiB of
+extracted bytes); dropping another file (or **cancel**) stops a running bundle. md5 is the
+content *name* (apkllm's choice), sha256 beside it tells an md5 collision from identical
+content (a pure-JS SHA-256 stands in where WebCrypto is unavailable, e.g. a plain-http origin).
 
 Out of scope: signature verification (Java apksig in apkllm) and unwrap (Python).
 

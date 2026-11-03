@@ -12,7 +12,7 @@
      built from and -N counts rebuilds against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "644c9e7-3";
+window.__APKLLM_BUILD = "644c9e7-4";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -269,6 +269,9 @@ window.__APKLLM_BUILD = "644c9e7-3";
   td.name { white-space:normal; word-break:break-all; max-width:420px; color:var(--fg); }
   #extract-table td.name { min-width:220px; }
   #extract-table tbody tr.busy td { opacity:0.55; }
+  /* one line, never wraps: a status that grew a line would shift the table between the two
+     clicks of a double-click (the 2nd click then lands on another row / button) */
+  #x-status { flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   td.wrap { white-space:normal; max-width:520px; color:var(--fg-2); }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   th.num { text-align:right; }
@@ -513,7 +516,7 @@ async function loadFile(file) {
   statusEl.innerHTML = '<span class="spin"></span>reading ' + esc(file.name);
   // a new file starts with every filter/chip at its default (Content chips reset in renderContent)
   gateClassOn = new Set(CLASS_ORDER);
-  xReaderOn = null; xSel = new Set(); $("#x-status").textContent = "";
+  xReaderOn = null; xSel = new Set(); setXStatus("");
   for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#tamper-filter"]) $(id).value = "";
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -657,10 +660,10 @@ function renderGateTable() {
       <td class="wrap">${esc(e.reason)}${e.needs.length ? ` <span class="tiny">needs: ${esc(e.needs.join(", "))}</span>` : ""}</td>
       <td><button data-i="${i}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
   // by index, not a name attribute: the HTML parser turns CR in an attribute into LF
-  for (const b of $("#gate-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2) extractAndSave(g.entries[Number(b.dataset.i)].name, b); });
+  for (const b of $("#gate-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2) extractAndSave(Number(b.dataset.i), b); });
 }
 
-const BYTES_TITLE = "device-faithful bytes from the entry's own reader (method 8 inflate / 0 stored / forged → AssetManager raw, strict readers reject)";
+const BYTES_TITLE = "device-faithful bytes from the entry's own reader (method 8 inflate / 0 stored / forged → AssetManager raw, strict readers reject), downloaded as {md5}.zip = {md5}.bin + {md5}.json";
 function saveBlob(blob, filename) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -668,34 +671,42 @@ function saveBlob(blob, filename) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
-// One entry → its own mapped device reader (engine extractEntry) → a download. `el` is the
-// trigger (a "bytes" button or an Extract-table row), styled busy while in flight; with
-// `statusEl` the outcome is reported there instead of an alert(). In-flight entries are kept
-// by name (a table re-render replaces the row, so a flag on the DOM node would be lost), and a
-// result that comes back after another APK was loaded is dropped — no stale download or status.
+// One entry (by its index in the gate / plan — both enumerate the same archive order) → its own
+// mapped device reader (engine extractEntry) → a download named the apkllm way: {md5}.zip holding
+// {md5}.bin + {md5}.json (the entry's report: original name, reader, read disposition, md5,
+// sha256) — never a filename taken from the attacker-controlled entry name. `el` is the trigger
+// (a "bytes" button or an Extract-table row), styled busy while in flight; with `statusEl` the
+// outcome is reported there instead of an alert(). In-flight entries are tracked by index (a
+// table re-render replaces the row), and a result that comes back after another APK was loaded
+// is dropped — no stale download or status.
 const extracting = new Set();
-async function extractAndSave(name, el, statusEl) {
-  if (extracting.has(name)) return;
-  const gen = loadGen;
-  extracting.add(name); el.classList.add("busy"); if (el.tagName === "BUTTON") el.disabled = true;
-  const live = () => gen === loadGen;
-  const say = (html) => { if (statusEl && live()) statusEl.innerHTML = html; };
+async function extractAndSave(index, el, statusEl) {
+  if (extracting.has(index) || !report?.gate.ok) return;
+  const gen = loadGen, cur = report, name = cur.gate.extract.entries[index]?.name ?? "?";
+  extracting.add(index); el.classList.add("busy"); if (el.tagName === "BUTTON") el.disabled = true;
+  const live = () => gen === loadGen && report === cur;
+  const say = (html) => { if (statusEl && live()) setXStatus(html, statusEl); };
   const tell = (msg, html) => statusEl ? say(html) : live() && alert(msg);
-  const fail = (msg) => tell("extract failed: " + msg, `<span class="err">${esc(name)}: ${esc(msg)}</span>`);
+  const fail = (msg) => tell(name + ": " + msg, `<span class="err">${esc(name)}: ${esc(msg)}</span>`);
   say(`<span class="spin"></span>extracting ${esc(name)}…`);
   try {
-    const r = await wcall({ type: "extract", name });
+    const r = await wcall({ type: "single", index, source: cur.file, params: gateParams() });
     if (!live()) return;
-    if (!r.ok) { fail(r.error); return; }
-    if (name.endsWith("/") && r.data.length === 0) { tell(name + " is a directory entry — nothing to download", `${esc(name)} is a directory entry — nothing to download`); return; }
-    const file = name.split("/").pop() || "entry.bin";
-    saveBlob(new Blob([r.data]), file);
-    say(`⇣ ${esc(file)} · ${esc(r.disposition)} by its reader · ${fmtSize(r.data.length)}`);
+    if (!r.ok) {
+      if (r.entry.kind === "directory") tell(name + " is a directory entry — nothing to download", `${esc(name)} is a directory entry — nothing to download`);
+      else fail(r.entry.error);
+      return;
+    }
+    saveBlob(r.blob, `${r.base}.zip`);   // {md5}, or {md5}.{sha256} when another content shares the md5
+    say(`⇣ ${r.base}.zip <span class="tiny">(${r.base === r.md5 ? "{md5}" : "{md5}.{sha256} — md5 shared with other content"}.bin + .json${r.same > 1 ? ` · ${r.same} entries share this content` : ""})</span> · ${esc(name)} · ${esc(r.entry.read)} by its reader · ${fmtSize(r.entry.size)}`);
   } catch (e) { fail(e.message); }
-  finally { extracting.delete(name); el.classList.remove("busy"); if (el.tagName === "BUTTON") el.disabled = false; }
+  finally { extracting.delete(index); el.classList.remove("busy"); if (el.tagName === "BUTTON") el.disabled = false; }
 }
 
 // Extract -------------------------------------------------------------------
+// every #x-status write goes here: the line is one ellipsized row, so its tooltip carries the
+// full text and must never lag behind it
+function setXStatus(html, el = $("#x-status")) { el.innerHTML = html; el.title = el.textContent; }
 const READER_ORDER = ["ART.DexFileLoader", "NativeLibraryHelper", "AssetManager", "libziparchive"];
 let xReaderOn = null, xSel = new Set(), xBusy = false;
 function renderExtract() {
@@ -754,7 +765,7 @@ function renderExtractTable() {
     if (cb.checked) xSel.add(i); else xSel.delete(i);
     syncExtractButtons();
   });
-  for (const b of $("#extract-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2 && !xBusy) extractAndSave(x.entries[Number(b.dataset.i)].name, b, $("#x-status")); });
+  for (const b of $("#extract-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2 && !xBusy) extractAndSave(Number(b.dataset.i), b, $("#x-status")); });
   syncExtractButtons();
 }
 function syncExtractButtons() {
@@ -768,11 +779,11 @@ function syncExtractButtons() {
 // double-click a row → extract that entry with its own reader and download it (a rejected
 // entry reports its reader's reason). The checkbox and the bytes button keep their own clicks.
 $("#extract-table").addEventListener("dblclick", (e) => {
+  window.getSelection()?.removeAllRanges();   // a double-click selects a word (also next to a button); drop it
   if (!report?.gate.ok || xBusy || e.target.closest("input, button")) return;   // not during a bundle
   const tr = e.target.closest("tbody tr[data-i]"); if (!tr) return;
-  window.getSelection()?.removeAllRanges();   // a double-click selects a word; drop it
   clearTimeout(pendingCopy);                  // …and the name click it began is not a copy
-  extractAndSave(report.gate.extract.entries[Number(tr.dataset.i)].name, tr, $("#x-status"));
+  extractAndSave(Number(tr.dataset.i), tr, $("#x-status"));
 });
 $("#x-sel-shown").addEventListener("click", () => { for (const { i } of shownExtractRows()) xSel.add(i); renderExtractTable(); });
 $("#x-sel-none").addEventListener("click", () => { xSel.clear(); renderExtractTable(); });
@@ -783,20 +794,24 @@ async function extractBundle(indices) {
   if (!report || !indices.length) return;
   const gen = loadGen, cur = report, st = $("#x-status");
   xBusy = true; syncExtractButtons();
-  st.innerHTML = '<span class="spin"></span>extracting…';
+  setXStatus('<span class="spin"></span>extracting…');
   try {
     const r = await wcall({ type: "bundle", indices, source: cur.file, params: gateParams() }, [],
-      ({ done, total }) => { if (gen === loadGen) st.innerHTML = `<span class="spin"></span>extracting ${done} / ${total}…`; });
+      ({ done, total }) => { if (gen === loadGen) setXStatus(`<span class="spin"></span>extracting ${done} / ${total}…`); });
     if (gen !== loadGen || report !== cur) return;
-    const base = cur.file.name.replace(/\.[^./]*$/, "") || "apk";
-    saveBlob(r.blob, base + ".extracted.zip");
-    const c = r.counts, parts = [`${c.files} file${c.files === 1 ? "" : "s"} extracted`];
-    if (c.directories) parts.push(`${c.directories} director${c.directories === 1 ? "y" : "ies"}`);
-    if (c.reader_rejected) parts.push(`<span class="err">${c.reader_rejected} rejected by their strict reader</span>`);
-    if (c.name_unaddressable) parts.push(`<span class="err">${c.name_unaddressable} not addressable by name (invalid UTF-8 name)</span>`);
-    if (c.extract_failed) parts.push(`<span class="err">${c.extract_failed} failed to extract</span>`);
-    st.innerHTML = parts.join(" · ") + ` · ${fmtSize(r.blob.size)}` + (c.files + c.directories < r.total ? ' <span class="tiny">(reasons in apkllm-extract.json)</span>' : "");
-  } catch (e) { if (gen === loadGen) st.innerHTML = '<span class="err">extract failed: ' + esc(e.message) + "</span>"; }
+    // apkllm naming: the bundle and its report are named by the INPUT's md5, files by their own
+    saveBlob(r.blob, `${r.input_md5}.extracted.zip`);
+    // warnings FIRST: the status is one ellipsized line, so what is cut off must be the routine part
+    const c = r.counts, warn = [], info = [];
+    if (c.reader_rejected) warn.push(`${c.reader_rejected} rejected by their strict reader`);
+    if (c.md5_collisions) warn.push(`${c.md5_collisions} md5 collision${c.md5_collisions === 1 ? "" : "s"} ({md5}.{sha256}.bin)`);
+    if (c.name_unaddressable) warn.push(`${c.name_unaddressable} not addressable by name (invalid UTF-8 name)`);
+    if (c.extract_failed) warn.push(`${c.extract_failed} failed to extract`);
+    info.push(`${c.extracted} entr${c.extracted === 1 ? "y" : "ies"} extracted → ${c.files} {md5}.bin file${c.files === 1 ? "" : "s"}`);
+    if (c.same_content) info.push(`${c.same_content} identical-content entr${c.same_content === 1 ? "y" : "ies"} share a file`);
+    if (c.directories) info.push(`${c.directories} director${c.directories === 1 ? "y" : "ies"}`);
+    setXStatus((warn.length ? `<span class="err">${warn.join(" · ")}</span> · ` : "") + info.join(" · ") + ` · ${fmtSize(r.blob.size)}` + ' <span class="tiny">(name → file mapping in ' + r.input_md5 + '.json)</span>');
+  } catch (e) { if (gen === loadGen) setXStatus('<span class="err">extract failed: ' + esc(e.message) + "</span>"); }
   finally { xBusy = false; syncExtractButtons(); }
 }
 
@@ -956,7 +971,10 @@ document.addEventListener("click", (e) => {
     return;
   }
   const item = e.target.closest(".copyable");
-  if (item && report && e.detail < 2 && !window.getSelection()?.toString()) {   // 2nd click of a double-click is not a copy
+  // the 2nd click of a double-click is not a copy, nor is a click that ends a text selection
+  // inside this very item (a selection elsewhere on the page does not block it)
+  const sel = window.getSelection();
+  if (item && report && e.detail < 2 && !(sel?.toString() && sel.containsNode(item, true))) {
     const name = ITEM[item.dataset.src]?.(Number(item.dataset.i));
     if (typeof name !== "string") return;
     // in the Extract table a double-click downloads: wait out the double-click window so the

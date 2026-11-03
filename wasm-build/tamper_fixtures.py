@@ -18,7 +18,8 @@ No apkllm import. Shapes:
   readers.apk  every one of the four device readers, STORED / DEFLATED, plus a CD method
                forged to 99 per reader (strict readers reject, AssetManager reads raw)
                and the bundle's path cases: "../", a directory entry, a case-only twin,
-               a DOS device stem, a 300-byte segment and tab/newline/CR/quote/formula names (copy)
+               a DOS device stem, a 300-byte segment and tab/newline/CR/quote/formula names (copy), a real MD5
+               collision pair and an identical-content pair (md5 naming)
 """
 import struct
 import sys
@@ -26,6 +27,16 @@ import zipfile
 from pathlib import Path
 
 DEX_MAGIC = b"dex\n035\x00" + b"\0" * 56
+# The classic 128-byte MD5 collision pair (Wang & Yu 2005; the MD5 Wikipedia example): md5
+# 79054025255fb1a26e4bc422aef54eb4 for both, 6 bytes apart.
+MD5_COLL_A = bytes.fromhex(
+    "d131dd02c5e6eec4693d9a0698aff95c2fcab58712467eab4004583eb8fb7f8955ad340609f4b30283e488832571415a"
+    "085125e8f7cdc99fd91dbdf280373c5bd8823e3156348f5bae6dacd436c919c6dd53e2b487da03fd02396306d248cda0"
+    "e99f33420f577ee8ce54b67080a80d1ec69821bcb6a8839396f9652b6ff72a70")
+MD5_COLL_B = bytes.fromhex(
+    "d131dd02c5e6eec4693d9a0698aff95c2fcab50712467eab4004583eb8fb7f8955ad340609f4b30283e4888325f1415a"
+    "085125e8f7cdc99fd91dbd7280373c5bd8823e3156348f5bae6dacd436c919c6dd53e23487da03fd02396306d248cda0"
+    "e99f33420f577ee8ce54b67080280d1ec69821bcb6a8839396f965ab6ff72a70")
 
 
 def build(path: Path, entries):
@@ -120,6 +131,10 @@ def main(out: Path):
         ("assets/cr\rname.txt", b"cr", S),                        # click-copy must stay byte-exact (DOM turns CR → LF)
         ('"lead.txt', b"quote", S),                               # a leading quote must not open a sheet quoted field
         ("=HYPERLINK(1)", b"formula", S),                         # must not paste as a live formula
+        ("assets/coll_a.bin", MD5_COLL_A, S),                     # a real MD5 collision pair (Wang–Yu):
+        ("assets/coll_b.bin", MD5_COLL_B, S),                     #   same md5, different sha256 → {md5}.{sha256}.bin
+        ("assets/twin1.bin", b"identical content" * 4, S),        # identical content → one {md5}.bin, both mapped
+        ("assets/twin2.bin", b"identical content" * 4, S),
     ])
     for n in ("classes3.dex", "lib/arm64-v8a/libf.so", "res/raw/f.bin", "assets/f.bin", "META-INF/F.SF", "data.bin"):
         forge_cd_method(readers, n, 99)

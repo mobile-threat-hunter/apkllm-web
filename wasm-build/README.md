@@ -62,13 +62,19 @@ device-faithful bytes, or the identical rejection error).
   libziparchive accepts but strict UTF-8 rejects, ≤16 bytes, and BOM-prefixed names) and
   `tail` (heads cut inside a UTF-8 sequence), and `readers` — every one of the four
   device readers STORED / DEFLATED plus a CD method forged to 99 per reader (strict readers
-  reject, AssetManager reads raw) and a `../` entry name for the bundle's path
-  sanitization. `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
+  reject, AssetManager reads raw) plus hostile names (`../`, a directory entry, case-only
+  twins, a DOS device stem, a 300-byte segment, tab / newline / CR / leading-quote / formula)
+  for the md5-named downloads and the copy TSV. `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
 - `xcheck.py` / `xcheck.mjs` — native-vs-wasm field-by-field comparison (above).
 - `browser_check.mjs` — serves the repo root, drives `index.html` over CDP, feeds an
   APK through the file input and asserts every panel rendered; on the Extract tab it runs
-  "extract all", captures the zip blob and checks it in the page (every entry is a file or a
-  recorded reader rejection, sanitized paths, CRC-32). `shot.png` → Tamper scan tab,
+  "extract all", captures the zip blob and checks it in node with `node:crypto` (every file
+  is `{md5}.bin` of its own content — `{md5}.{sha256}.bin` for readers.apk's real MD5 collision
+  pair —, the report is `{input md5}.json`, every entry is a file, a directory or a failure with
+  a cause, the four-reader rule), single-entry downloads named exactly as the bundle names them
+  (identical-content twins → the same file and JSON), the row double-click download (content
+  and naming checked on a synthetic dblclick; real CDP mouse input checks one download per
+  double-click and no clipboard write), copy buttons and tab badges. `shot.png` → Tamper scan tab,
   `shot-extract.png` → Extract tab.
 - `../domain.js` (repo root) — apkllm's Python policy layer (`magic.py`,
   `container._container_checks` / `content_map` / `_tamper_checks` / `_disposition` +

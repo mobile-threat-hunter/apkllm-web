@@ -6,7 +6,9 @@
 //
 // Needs google-chrome on PATH and node ≥ 22 (global WebSocket).
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { inflateRawSync } from "node:zlib";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
@@ -16,6 +18,20 @@ const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const APK = resolve(argv[2]);
 const SHOT = argv[3];
 const base = APK.split("/").pop().replace(/\.apk$/, "");
+const md5 = (b) => createHash("md5").update(b).digest("hex");
+const sha256 = (b) => createHash("sha256").update(b).digest("hex");
+// the page's zips are STORED; parse via the central directory (names → bytes)
+function unzipStored(buf) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const n = buf.readUInt16LE(eocd + 10); let p = buf.readUInt32LE(eocd + 16); const out = new Map();
+  for (let i = 0; i < n; i++) {
+    const method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), nl = buf.readUInt16LE(p + 28), el = buf.readUInt16LE(p + 30), cl = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42);
+    const name = buf.subarray(p + 46, p + 46 + nl).toString("utf8"); p += 46 + nl + el + cl;
+    const lnl = buf.readUInt16LE(off + 26), lel = buf.readUInt16LE(off + 28), raw = buf.subarray(off + 30 + lnl + lel, off + 30 + lnl + lel + csize);
+    out.set(name, method === 8 ? inflateRawSync(raw) : Buffer.from(raw));
+  }
+  return out;
+}
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".png": "image/png" };
 
 const server = createServer(async (req, res) => {
@@ -101,8 +117,10 @@ try {
   const hexLen = await evalJs(`(document.querySelector("#content-hex pre")||{textContent:""}).textContent.length`);
   if (gateOpened && hexLen === 0) fail("hex view empty");
   // Extract tab: plan rows, then "extract all" → capture the zip blob instead of downloading
-  // it, and check it against the plan inside the page (paths sanitized, every entry either
-  // a file or a recorded reader rejection, CRC of each stored file).
+  // it and check it HERE in node, hashes by node:crypto (independent of the page's md5): apkllm
+  // naming — every file is {md5}.bin of its content ({md5}.{sha256}.bin on a collision), the
+  // report is {input md5}.json, nothing is named after an entry; every entry is a file, a
+  // directory or a recorded reader rejection; the four-reader rule holds.
   if (gateOpened) {
     const xs = JSON.parse(await evalJs(`(async()=>{
       document.querySelector('[data-tab="extract"]').click();
@@ -113,47 +131,76 @@ try {
       for (let t = 0; t < 600 && !blob; t++) await new Promise(r => setTimeout(r, 100));
       window.saveBlob = orig;
       if (!blob) return JSON.stringify({ rows, err: "no blob: " + document.querySelector("#x-status").textContent });
-      const b = new Uint8Array(await blob.arrayBuffer()), dv = new DataView(b.buffer);
-      const eocd = b.length - 22, n = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
-      const td = new TextDecoder(), files = {}; let crcBad = 0;
-      const crc = (d) => { let c = ~0; for (const x of d) { c ^= x; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; } return ~c >>> 0; };
-      for (let i = 0; i < n; i++) {
-        const nl = dv.getUint16(p + 28, true), off = dv.getUint32(p + 42, true), size = dv.getUint32(p + 24, true), c = dv.getUint32(p + 16, true);
-        const name = td.decode(b.subarray(p + 46, p + 46 + nl)); p += 46 + nl;
-        const lnl = dv.getUint16(off + 26, true), data = b.subarray(off + 30 + lnl, off + 30 + lnl + size);
-        if (size < 1 << 20 && crc(data) !== c) crcBad++;
-        files[name] = data;
-      }
-      const man = JSON.parse(td.decode(files["apkllm-extract.json"]));
-      const bad = Object.keys(files).filter(f => f !== "apkllm-extract.json" && (!/^(files|collisions)\\//.test(f) || f.replace(/\\/$/, "").split("/").some(s => s === ".." || s === "." || s === "")));
-      const missing = man.entries.filter(e => e.kind === "file" && !(e.path in files)).length;
-      const unique = plan.entries.length;   // one manifest row per gate entry
-      const sorted = (xs) => JSON.stringify([...xs].sort());
-      const rejected = man.entries.filter(e => e.failure === "reader_rejected").map(e => e.name);
-      // four-reader rule: reader_rejected is exactly the plan's undeliverable set, minus entries
-      // the by-name lookup never reaches (name_unaddressable takes precedence)
-      const unaddressable = new Set(man.entries.filter(e => e.failure === "name_unaddressable").map(e => e.index));
-      const undeliverable = plan.entries.map((e, i) => ({ e, i })).filter(({ e, i }) => !e.deliverable && !unaddressable.has(i)).map(({ e }) => e.name);
-      const keyClash = Object.keys(files).length !== new Set(Object.keys(files).map(f => f.normalize("NFC").toLowerCase())).size;
-      const longSeg = Object.keys(files).some(f => f.split("/").some(sg => new TextEncoder().encode(sg).length > 255));
-      return JSON.stringify({ rows, zipEntries: n, counts: man.counts, total: man.entries.length, unique, bad, missing, crcBad, keyClash, longSeg,
-        rejectedOk: sorted(rejected) === sorted(undeliverable), uncaused: man.entries.filter(e => !e.ok && !e.failure).length,
-        failedNames: man.entries.filter(e => !e.ok).map(e => e.name + ":" + e.failure), status: document.querySelector("#x-status").textContent, fname: window.__xname });
-    })()`, 90000));
-    console.log("extract:", JSON.stringify(xs).slice(0, 400));
+      const u8 = new Uint8Array(await blob.arrayBuffer()); let bin = "";
+      for (let k = 0; k < u8.length; k += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(k, k + 0x8000));
+      return JSON.stringify({ rows, b64: btoa(bin), fname: window.__xname, status: document.querySelector("#x-status").textContent,
+        plan: plan.entries.map(e => ({ name: e.name, deliverable: e.deliverable })) });
+    })()`, 120000));
     if (xs.err) fail(xs.err);
     else {
+      const zipFiles = unzipStored(Buffer.from(xs.b64, "base64"));
+      const inputMd5 = md5(readFileSync(APK));
+      const names = [...zipFiles.keys()];
+      const reportName = `${inputMd5}.json`;
+      const rep = zipFiles.has(reportName) ? JSON.parse(zipFiles.get(reportName).toString("utf8")) : null;
+      const badNames = names.filter(n => n !== reportName && !/^[0-9a-f]{32}(\.[0-9a-f]{64})?\.bin$/.test(n));
+      const hashBad = names.filter(n => n !== reportName).filter(n => { const d = zipFiles.get(n), [m, sh] = n.replace(/\.bin$/, "").split(".");
+        return md5(d) !== m || (sh && sha256(d) !== sh); });
+      console.log("extract:", JSON.stringify({ rows: xs.rows, zipEntries: names.length, fname: xs.fname, counts: rep?.counts, status: xs.status }).slice(0, 400));
       if (xs.rows === 0) fail("extract table empty");
-      const c = xs.counts, covered = c.files + c.directories + c.reader_rejected + c.name_unaddressable + c.extract_failed;
-      // zip holds files + directory records + the manifest
-      if (xs.total !== xs.unique || covered !== xs.unique) fail(`bundle covers ${covered} (${xs.total} rows) of ${xs.unique} entries`);
-      if (xs.zipEntries !== c.files + c.directories + 1) fail("zip entry count ≠ files + directories + manifest");
-      if (xs.bad.length) fail("unsanitized output paths: " + xs.bad.join(", "));
-      if (xs.missing || xs.crcBad) fail(`manifest paths missing ${xs.missing} / crc mismatches ${xs.crcBad}`);
-      if (xs.keyClash) fail("two output paths collide on a case-insensitive filesystem");
-      if (xs.longSeg) fail("an output path segment exceeds 255 bytes");
-      if (!xs.rejectedOk) fail("reader_rejected set ≠ the plan's undeliverable set (four-reader rule)");
-      if (xs.uncaused) fail(`${xs.uncaused} failed rows without a failure cause`);
+      if (!rep) fail(`report ${reportName} (input md5) missing; zip has ${names.slice(0, 5).join(", ")}`);
+      else {
+        const c = rep.counts, total = xs.plan.length;
+        if (rep.input.md5 !== inputMd5) fail("report input.md5 ≠ md5 of the APK");
+        if (xs.fname !== `${inputMd5}.extracted.zip`) fail("bundle download name " + xs.fname);
+        if (badNames.length) fail("output names not {md5}.bin: " + badNames.slice(0, 5).join(", "));
+        if (hashBad.length) fail("file content does not hash to its name: " + hashBad.slice(0, 5).join(", "));
+        if (rep.entries.length !== total || c.extracted + c.directories + c.reader_rejected + c.name_unaddressable + c.extract_failed !== total) fail(`report covers ${rep.entries.length} rows / counts ${JSON.stringify(c)} of ${total} entries`);
+        if (names.length !== c.files + 1) fail(`zip has ${names.length} entries for ${c.files} files + report`);
+        if (c.extracted !== c.files + c.same_content) fail("extracted ≠ files + same_content");
+        for (const e of rep.entries.filter(e => e.kind === "file")) {
+          const d = zipFiles.get(e.file);
+          if (!d) { fail(`${JSON.stringify(e.name)} → ${e.file} not in the zip`); break; }
+          if (md5(d) !== e.md5 || sha256(d) !== e.sha256 || d.length !== e.size) { fail(`${JSON.stringify(e.name)} hashes/size ≠ its file`); break; }
+        }
+        // four-reader rule: reader_rejected is exactly the plan's undeliverable set, minus entries
+        // the by-name lookup never reaches (name_unaddressable takes precedence)
+        const unaddr = new Set(rep.entries.filter(e => e.failure === "name_unaddressable").map(e => e.index));
+        const sorted = (xs) => JSON.stringify([...xs].sort());
+        if (sorted(rep.entries.filter(e => e.failure === "reader_rejected").map(e => e.name)) !== sorted(xs.plan.filter((e, i) => !e.deliverable && !unaddr.has(i)).map(e => e.name)))
+          fail("reader_rejected set ≠ the plan's undeliverable set (four-reader rule)");
+        if (rep.entries.some(e => !e.ok && !e.failure)) fail("failed rows without a failure cause");
+        if (rep.entries.some(e => !e.ok && e.file) || rep.entries.some(e => e.kind === "directory" && e.file)) fail("a failed / directory row carries a file");
+        if (rep.input.sha256 !== sha256(readFileSync(APK)) || rep.input.size !== readFileSync(APK).length) fail("report input sha256/size ≠ the APK");
+        // single downloads must name a file exactly as the bundle did, and identical-content
+        // entries must produce the same file AND the same JSON (unzipping both never loses a mapping)
+        const probe = rep.entries.filter(e => e.kind === "file" && /^assets\/(coll_[ab]|twin[12])\.bin$/.test(e.name));
+        if (base === "readers") {
+          if (c.md5_collisions < 1 || c.same_content < 1) fail("readers.apk: md5 collision / identical-content fixtures not exercised " + JSON.stringify(c));
+          const ca = probe.find(e => e.name === "assets/coll_a.bin"), cb = probe.find(e => e.name === "assets/coll_b.bin");
+          if (!ca || !cb || ca.md5 !== cb.md5 || ca.sha256 === cb.sha256 || ca.file === cb.file
+              || ![ca.file, cb.file].includes(`${ca.md5}.bin`) || ![ca.file, cb.file].includes(`${cb.md5}.${(ca.file === `${ca.md5}.bin` ? cb : ca).sha256}.bin`)) fail("md5 collision not split into {md5}.bin + {md5}.{sha256}.bin: " + JSON.stringify([ca?.file, cb?.file]));
+          const t1 = probe.find(e => e.name === "assets/twin1.bin"), t2 = probe.find(e => e.name === "assets/twin2.bin");
+          if (!t1 || !t2 || t1.file !== t2.file) fail("identical content not one file");
+        }
+        if (probe.length) {
+          const sg = JSON.parse(await evalJs(`(async()=>{ const out = [];
+            for (const i of ${JSON.stringify(probe.map(e => e.index))}) { const r = await wcall({ type: "single", index: i, source: report.file, params: gateParams() });
+              const u8 = new Uint8Array(await r.blob.arrayBuffer()), dv = new DataView(u8.buffer), eo = u8.length - 22, n = dv.getUint16(eo + 10, true); let p = dv.getUint32(eo + 16, true); const m = {};
+              for (let k = 0; k < n; k++) { const nl = dv.getUint16(p + 28, true), off = dv.getUint32(p + 42, true), sz = dv.getUint32(p + 24, true); const nm = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nl)); p += 46 + nl; const lnl = dv.getUint16(off + 26, true); m[nm] = new TextDecoder().decode(u8.subarray(off + 30 + lnl, off + 30 + lnl + sz)); }
+              out.push({ i, base: r.base, names: Object.keys(m).sort(), json: m[r.base + ".json"] ?? null }); }
+            return JSON.stringify(out); })()`));
+          for (const x of sg) {
+            const e = rep.entries.find(r => r.index === x.i);
+            if (x.base + ".bin" !== e.file || JSON.stringify(x.names) !== JSON.stringify([x.base + ".bin", x.base + ".json"].sort())) fail(`single ${JSON.stringify(e.name)} named ${x.base} but the bundle says ${e.file}`);
+            const j = x.json && JSON.parse(x.json);
+            if (!j || !j.entries.some(r => r.index === x.i) || j.file !== e.file) fail(`single ${JSON.stringify(e.name)} JSON does not map it`);
+          }
+          const tw = sg.filter(x => /twin[12]/.test(rep.entries.find(r => r.index === x.i).name));
+          if (tw.length === 2 && tw[0].json !== tw[1].json) fail("two downloads of identical content produced different JSON (one mapping would be lost on unzip)");
+          if (tw.length === 2 && JSON.parse(tw[0].json).entries.length !== 2) fail("identical-content JSON does not list both entries");
+        }
+      }
     }
   }
   // double-click an Extract row → that entry through its own reader → a download whose bytes
@@ -170,16 +217,25 @@ try {
       const dbl = async (i) => { const tr = document.querySelector('#extract-table tbody tr[data-i="' + i + '"]');
         tr.querySelector("td.name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); await new Promise(r => setTimeout(r, 10)); await settle(); };
       const same = (a, b) => a.length === b.length && a.every((x, k) => x === b[k]);
+      // the single download is {md5}.zip = {md5}.bin + {md5}.json (STORED)
+      const unz = (u8) => { const dv = new DataView(u8.buffer), eo = u8.length - 22, n = dv.getUint16(eo + 10, true); let p = dv.getUint32(eo + 16, true); const m = {};
+        for (let k = 0; k < n; k++) { const nl = dv.getUint16(p + 28, true), off = dv.getUint32(p + 42, true), sz = dv.getUint32(p + 24, true);
+          const nm = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nl)); p += 46 + nl; const lnl = dv.getUint16(off + 26, true); m[nm] = u8.subarray(off + 30 + lnl, off + 30 + lnl + sz); } return m; };
+      const b64 = (u8) => { let s = ""; for (let k = 0; k < u8.length; k += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(k, k + 0x8000)); return btoa(s); };
       const out = {};
       const okI = plan.findIndex(e => e.deliverable && !e.name.endsWith("/") && !/[\\u0080-\\uffff]/.test(e.name) ? true : false);
       if (okI >= 0) {
         const n = saved.length; await dbl(okI);
         const want = await wcall({ type: "extract", name: plan[okI].name });
-        out.ok = saved.length === n + 1 && want.ok && same(new Uint8Array(await saved[saved.length - 1].b.arrayBuffer()), want.data);
-        out.okName = saved[saved.length - 1]?.n;
+        const z = saved.length === n + 1 ? unz(new Uint8Array(await saved[saved.length - 1].b.arrayBuffer())) : {};
+        const md = (saved[saved.length - 1]?.n || "").replace(/\.zip$/, "");
+        const rep = z[md + ".json"] ? JSON.parse(new TextDecoder().decode(z[md + ".json"])) : null;
+        const ent = rep?.entries?.find(r => r.index === okI);
+        out.ok = !!(want.ok && z[md + ".bin"] && same(z[md + ".bin"], want.data) && ent?.name === plan[okI].name && rep.file === md + ".bin" && ent.file === md + ".bin" && Object.keys(z).length === 2);
+        out.okName = saved[saved.length - 1]?.n; out.single = { md, b64: z[md + ".bin"] ? b64(z[md + ".bin"]) : "", sha: rep?.sha256, inputMd5: rep?.input?.md5 };
       }
       const badI = plan.findIndex(e => !e.deliverable);
-      if (badI >= 0) { const n = saved.length; await dbl(badI); out.rejectedNoDownload = saved.length === n; out.rejectedStatus = $("#x-status").textContent; }
+      if (badI >= 0) { const n = saved.length; await dbl(badI); out.rejectedNoDownload = saved.length === n; out.rejectedStatus = $("#x-status").textContent; out.rejectedName = plan[badI].name; }
       const crI = report.gate.entries.findIndex(e => e.name.includes("\\r"));
       if (crI >= 0) {
         document.querySelector('[data-tab="gate"]').click();
@@ -199,8 +255,9 @@ try {
     })()`));
     // REAL mouse double-clicks (CDP input, two clicks with detail 1 then 2): on a name → one
     // download and no clipboard write; on a "bytes" button → exactly one download
+    // aim at the first line box: a wrapped name's union-box centre can fall between its lines
     const realDbl = async (selector) => {
-      const r = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const b = el.getBoundingClientRect(); return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
+      const r = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const b = el.getClientRects()[0]; return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
       for (const clickCount of [1, 2]) for (const type of ["mousePressed", "mouseReleased"])
         await S("Input.dispatchMouseEvent", { type, x: r.x, y: r.y, button: "left", clickCount });
       await evalJs(`(async()=>{ await new Promise(r => setTimeout(r, 450)); for (let t = 0; t < 100 && extracting.size; t++) await new Promise(r => setTimeout(r, 50)); return true; })()`);
@@ -215,17 +272,27 @@ try {
       const b = JSON.parse(await evalJs(`JSON.stringify({ dl: window.__saved.length - window.__n0 })`));
       dc.realBytes = b; if (b.dl !== 1) fail("real double-click on bytes downloaded " + b.dl + " times");
       // a real SINGLE click on an Extract name still copies it (after the double-click window)
-      const r1 = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector('#extract-table tbody tr[data-i="${dc.found.okI}"] .copyable'); const b = el.getBoundingClientRect(); window.__copied = []; window.__n0 = window.__saved.length; return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
+      const r1 = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector('#extract-table tbody tr[data-i="${dc.found.okI}"] .copyable'); const b = el.getClientRects()[0]; window.__copied = []; window.__n0 = window.__saved.length; return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
       for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, x: r1.x, y: r1.y, button: "left", clickCount: 1 });
       const c = JSON.parse(await evalJs(`(async()=>{ await new Promise(r => setTimeout(r, 500)); return JSON.stringify({ copied: window.__copied, dl: window.__saved.length - window.__n0, want: report.gate.extract.entries[${dc.found.okI}].name }); })()`));
       dc.realClick = { copied: c.copied.length, dl: c.dl };
       if (c.copied.length !== 1 || c.copied[0] !== c.want || c.dl !== 0) fail("real single click on an Extract name: " + JSON.stringify(c));
     }
+    console.log("real mouse:", JSON.stringify({ name: dc.realName, bytes: dc.realBytes, click: dc.realClick }));
     await evalJs(`window.saveBlob = (b, n) => {}; true`);
     console.log("dblclick:", JSON.stringify(dc).slice(0, 300));
     if (dc.ok === false) fail("double-click download ≠ extractEntry bytes");
+    if (dc.single) {   // node:crypto, independent of the page's md5
+      const d = Buffer.from(dc.single.b64, "base64");
+      const [nm, nsh] = dc.single.md.split(".");   // {md5} or {md5}.{sha256}
+      if (md5(d) !== nm || sha256(d) !== dc.single.sha || (nsh && nsh !== dc.single.sha)) fail(`single download ${dc.okName}: content md5/sha256 ≠ name/report`);
+      if (dc.single.inputMd5 !== md5(readFileSync(APK))) fail("single report input.md5 ≠ md5 of the APK");
+      if (!/^[0-9a-f]{32}(\.[0-9a-f]{64})?\.zip$/.test(dc.okName)) fail("single download is not {md5}[.{sha256}].zip: " + dc.okName);
+    }
     if (dc.rejectedNoDownload === false) fail("a reader-rejected row downloaded something");
-    if (dc.rejectedStatus !== undefined && !/strict reader rejects/.test(dc.rejectedStatus)) fail("rejected row did not report its reader's reason: " + dc.rejectedStatus);
+    // an undeliverable entry whose NAME cannot be looked up (invalid UTF-8) reports that miss instead
+    // the reason must be the reader's — unless the NAME itself cannot be looked up (U+FFFD-decoded)
+    if (dc.rejectedStatus !== undefined && !(/\uFFFD/.test(dc.rejectedName) ? /FindEntry: Entry not found|decode to this same name/ : /strict reader rejects/).test(dc.rejectedStatus)) fail("rejected row did not report its reason: " + dc.rejectedStatus);
     if (dc.crBytes === false) fail("gate bytes button lost a CR-named entry");
     if (dc.staleDropped === false) fail("an extract that finished after a new load still downloaded");
     if (dc.alerts?.length) fail("unexpected alert: " + dc.alerts.join(" | "));
