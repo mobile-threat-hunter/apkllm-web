@@ -38,8 +38,10 @@ node xcheck.mjs /tmp/native.json                # → ALL MATCH
 ~/emsdk/node/22.16.0_64bit/bin/node browser_check.mjs APK [shot.png]   # → BROWSER OK
 ```
 
-`xcheck` compares content_map / tamper_report / install_gate (five input combinations)
-field by field, including the `checks[]` reasons `domain.js` reproduces from Python.
+`xcheck` compares content_map / tamper_report / install_gate + extract_report (six input
+combinations) field by field, including the `checks[]` reasons `domain.js` reproduces from
+Python, and runs `extract_entry` on every entry name on both sides (sha256 of the
+device-faithful bytes, or the identical rejection error).
 
 ## Layout
 
@@ -54,17 +56,23 @@ field by field, including the `checks[]` reasons `domain.js` reproduces from Pyt
 - `smoke.mjs` — node smoke test; self-consistency across the five functions. Ground
   truth is the native binding on the same files:
   `cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -c 'import sys; sys.path.insert(0,"build/dev"); import _apk_core as c; print(c.install_gate(PATH, arsc_scope=None)["entry_count"])'`
-- `tamper_fixtures.py` — synthesizes six fixtures: dup-name / Janus / CD-method-forged
+- `tamper_fixtures.py` — synthesizes seven fixtures: dup-name / Janus / CD-method-forged
   (shapes from `apkllm/tests/test_checks.py`, the findings path) plus the review-found
   drift cases — `ctor` (extension = a JS `Object.prototype` key), `shortbad` (entry names
   libziparchive accepts but strict UTF-8 rejects, ≤16 bytes, and BOM-prefixed names) and
-  `tail` (heads cut inside a UTF-8 sequence). `smoke.mjs` asserts the expected findings /
-  `would_open` per fixture name.
+  `tail` (heads cut inside a UTF-8 sequence), and `readers` — every one of the four
+  device readers STORED / DEFLATED plus a CD method forged to 99 per reader (strict readers
+  reject, AssetManager reads raw) and a `../` entry name for the bundle's path
+  sanitization. `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
 - `xcheck.py` / `xcheck.mjs` — native-vs-wasm field-by-field comparison (above).
 - `browser_check.mjs` — serves the repo root, drives `index.html` over CDP, feeds an
-  APK through the file input and asserts every panel rendered.
+  APK through the file input and asserts every panel rendered; on the Extract tab it runs
+  "extract all", captures the zip blob and checks it in the page (every entry is a file or a
+  recorded reader rejection, sanitized paths, CRC-32). `shot.png` → Tamper scan tab,
+  `shot-extract.png` → Extract tab.
 - `../domain.js` (repo root) — apkllm's Python policy layer (`magic.py`,
-  `container._container_checks` / `content_map` / `_tamper_checks`) ported to JS; the
+  `container._container_checks` / `content_map` / `_tamper_checks` / `_disposition` +
+  `extract_report`) ported to JS; the
   worker runs it over the engine's raw results.
 
 ## Lessons carried from dexllm-web / axmlllm-web

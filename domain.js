@@ -8,7 +8,9 @@
 //   src/apkllm/magic.py       → SIGNATURES / classify / unknownKind / entropy
 //   src/apkllm/container.py   → contentMap (per-entry typing + role/extension
 //                               mismatch + checks), containerChecks (install-gate
-//                               checks), tamperChecks
+//                               checks), tamperChecks, extractReport
+//                               (_disposition + extract_map + extract_report: the
+//                               four-reader decompression plan)
 //
 // Keep it a faithful port: same signature order, same reasons, same tri-state
 // (true / false / null) semantics. Verified against the Python layer by
@@ -503,6 +505,106 @@ function tamperChecks(r) {
   ];
 }
 
+// Which of the four device readers (apk-decompression-model) consumes each class.
+const READER = {
+  native_lib: "NativeLibraryHelper",  // installer, strict (NativeLibraryHelper.cpp:310)
+  dex: "ART.DexFileLoader",           // strict (dex_file_loader.cc:521)
+  manifest: "AssetManager",           // lenient (AssetsProvider.cpp:199)
+  resource: "AssetManager",           // lenient
+  resources_arsc: "AssetManager",     // lenient read + strict install gate (targetSdk)
+  meta: "libziparchive",              // generic strict (zip_archive.cc:1605)
+  other: "libziparchive",
+};
+
+// container._disposition — how the DEVICE reader for this entry's class handles it.
+function disposition(e, enl, pageSize) {
+  const method = e.method, off = e.data_offset, klass = e.class;
+  const known = method === 0 || method === 8;
+  const diverges = !known;
+  let disp, loads;
+  if (klass === "native_lib") {
+    if (!known) [disp, loads] = ["rejected", false];
+    else if (enl === true) [disp, loads] = ["extract_to_file", true];
+    else if (method === 0 && off % pageSize === 0) [disp, loads] = ["mmap_in_place", true];
+    else if (enl === false) [disp, loads] = ["rejected", false];
+    else [disp, loads] = ["rejected_if_false", null];
+  } else if (klass === "dex") {
+    if (!known) [disp, loads] = ["rejected", false];
+    else if (method === 0 && off % 4 === 0) [disp, loads] = ["mmap_in_place", true];
+    else [disp, loads] = ["extract_to_memory", true];
+    if (known && !e.primary_multidex) loads = null;
+  } else if (klass === "resources_arsc") {
+    const needs = e.needs || [];
+    if (method !== 8 && off % 4 === 0) [disp, loads] = ["mmap_in_place", true];
+    else if (e.passes ?? true) [disp, loads] = method === 8 ? ["inflate", true] : ["stored_passthrough", true];
+    else if (e.install_fatal) [disp, loads] = ["rejected", false];
+    else if (needs.length && needs.every(n => n === "target_sdk")) [disp, loads] = ["rejected_if_target_ge_30", null];
+    else if (needs.includes("target_sdk")) [disp, loads] = ["rejected_if_in_base_and_target_ge_30", null];
+    else [disp, loads] = ["rejected_if_in_base_asset_manager", null];
+  } else if (klass === "manifest" || klass === "resource") {
+    [disp, loads] = method === 8 ? ["inflate", true] : ["stored_passthrough", true];
+  } else {
+    if (method === 8) [disp, loads] = ["inflate", true];
+    else if (method === 0) [disp, loads] = ["stored_passthrough", true];
+    else [disp, loads] = ["rejected", false];
+  }
+  const needsStr = (e.needs || []).join(", ");
+  let reason = "";
+  if (diverges) reason = `method ${method} ∉ {0,8} — strict readers reject; AssetManager treats as stored`;
+  else if (disp === "rejected") reason = klass === "resources_arsc" && e.reason ? e.reason : "device reader rejects this entry (would not load/install)";
+  else if (disp === "rejected_if_false") reason = "rejected IF extractNativeLibs=false, else extracted — needs axmlllm";
+  else if (disp === "rejected_if_target_ge_30") reason = "resources.arsc compressed/unaligned — INSTALL_PARSE_FAILED IF targetSdk>29 (needs axmlllm)";
+  else if (disp === "rejected_if_in_base_asset_manager") reason = "resources.arsc compressed/unaligned — INSTALL_PARSE_FAILED (targetSdk>29) IF this APK is in the base AssetManager (needs " + needsStr + ")";
+  else if (disp === "rejected_if_in_base_and_target_ge_30") reason = "resources.arsc compressed/unaligned — INSTALL_PARSE_FAILED IF targetSdk>29 AND in the base AssetManager (needs " + needsStr + ")";
+  else if (klass === "dex" && !e.primary_multidex) reason = "non-primary dex — not ART-auto-loaded; secondary-dex candidate (DexClassLoader)";
+  // deliverable = the mapped reader ATTEMPTS extraction (structural; extractEntry is the ground truth)
+  const deliverable = known || klass === "manifest" || klass === "resource" || klass === "resources_arsc";
+  return { reader: READER[klass], disposition: disp, diverges, device_loads: loads, deliverable, reason };
+}
+
+// container.extract_report over an install_gate() result (extract_map folded in). The
+// role-echo keys are the Python wrapper's; the demo takes arsc_scope directly (see gate),
+// so it matches extract_report fed the CORE gate (xcheck.py does exactly that): the
+// wrapper's role-fact needs and " [in_base_asset_manager_reason]" arsc suffixes are absent.
+function extractReport(g) {
+  if (!g.ok) return g;
+  const entries = g.entries.map(e => {
+    const d = disposition(e, g.extract_native_libs, g.page_size);
+    return { name: e.name, class: e.class, method: e.method, primary_multidex: e.primary_multidex, ...d,
+             decompresses: e.method === 8 && d.deliverable };
+  });
+  const byDisp = {}, byReader = {};
+  for (const e of entries) {
+    byDisp[e.disposition] = (byDisp[e.disposition] ?? 0) + 1;
+    byReader[e.reader] = (byReader[e.reader] ?? 0) + 1;
+  }
+  const brief = (e) => ({ name: e.name, reader: e.reader, method: e.method });
+  const forged = entries.filter(e => e.diverges).map(brief);
+  const undeliverable = entries.filter(e => !e.deliverable).map(brief);
+  const plural = (n) => n === 1 ? "y" : "ies";
+  const summary = {
+    by_disposition: byDisp, by_reader: byReader,
+    will_inflate: entries.filter(e => e.decompresses).length,
+    stored_or_mmap: entries.filter(e => e.method === 0).length,
+    diverges: forged.length, undeliverable: undeliverable.length,
+    device_rejected: entries.filter(e => e.device_loads === false).length,
+  };
+  const checks = [
+    check("extract.method_forgery", !forged.length, "warning",
+      forged.length
+        ? `${forged.length} entr${plural(forged.length)} with method ∉ {0,8} — forge-the-method evasion (breaks generic unzip; device reads via its reader)`
+        : "no method forgery — every entry method ∈ {0,8}",
+      forged.length ? { forged } : null),
+    check("extract.all_deliverable", !undeliverable.length, "warning",
+      undeliverable.length
+        ? `${undeliverable.length} entr${plural(undeliverable.length)} its mapped strict reader will NOT attempt (forged non-{0,8} method) — extract_entry raises without attempting`
+        : "no entry is structurally undeliverable; every entry's mapped reader will ATTEMPT extraction — but a method-8 stream that is corrupt/mislabeled (e.g. forged 0→8) still fails at extract_entry (verified there, not here)",
+      undeliverable.length ? { undeliverable } : null),
+  ];
+  return { ok: true, extract_native_libs: g.extract_native_libs, target_sdk: g.target_sdk,
+           entry_count: entries.length, summary, checks, entries };
+}
+
 root.ApkllmDomain = { HEAD_BYTES, SIGNATURES, CATEGORY, classify, unknownKind, entropy,
-                      contentMap, containerChecks, tamperChecks };
+                      contentMap, containerChecks, tamperChecks, READER, extractReport };
 })(typeof self !== "undefined" ? self : globalThis);

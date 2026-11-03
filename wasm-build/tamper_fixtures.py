@@ -15,6 +15,10 @@ No apkllm import. Shapes:
                names on both sides of emscripten's 16-byte decoder split (ADV-3)
   tail.apk     >512-byte 'unknown' entries whose 512-byte head is cut inside a UTF-8
                sequence: valid-incomplete (text) vs invalid continuation (binary) (ADV-5)
+  readers.apk  every one of the four device readers, STORED / DEFLATED, plus a CD method
+               forged to 99 per reader (strict readers reject, AssetManager reads raw)
+               and the bundle's path cases: "../", a directory entry, a case-only twin,
+               a DOS device stem and a 300-byte segment
 """
 import struct
 import sys
@@ -92,7 +96,30 @@ def main(out: Path):
         ("t5.bin", b"A" * 511 + b"\xff" + b"B" * 100, zipfile.ZIP_STORED),           # invalid start → binary
         ("t6.bin", b"A" * 510 + b"\xe0\x80" + b"B" * 100, zipfile.ZIP_STORED),       # E0 needs A0.. → binary
     ])
-    for p in (dup, janus, cdforge, ctor, shortbad, tail):
+    D, S = zipfile.ZIP_DEFLATED, zipfile.ZIP_STORED
+    readers = build(out / "readers.apk", [
+        ("AndroidManifest.xml", b"\x03\x00\x08\x00" + b"m" * 600, D),
+        ("classes.dex", DEX_MAGIC, S),
+        ("classes2.dex", DEX_MAGIC + b"d" * 2000, D),
+        ("classes3.dex", DEX_MAGIC, S),                        # forged → ART strict rejects
+        ("lib/arm64-v8a/libz.so", b"\x7fELF" + b"z" * 3000, D),
+        ("lib/arm64-v8a/libf.so", b"\x7fELF" + b"f" * 64, S),  # forged → NativeLibraryHelper rejects
+        ("resources.arsc", b"\x02\x00\x0c\x00" + b"r" * 900, D),
+        ("res/raw/r.bin", b"r" * 4000, D),
+        ("res/raw/f.bin", b"FORGED-RES" * 8, S),               # forged → AssetManager lenient raw
+        ("assets/a.bin", b"a" * 4000, D),
+        ("assets/f.bin", b"FORGED-ASSET" * 8, S),              # forged → assets/ is AssetManager: lenient raw
+        ("data.bin", b"FORGED-OTHER" * 8, S),                  # forged → generic libziparchive (other) rejects
+        ("META-INF/F.SF", b"Signature-Version: 1.0\r\n", S),   # forged → libziparchive strict rejects
+        ("../evil/x.txt", b"traversal name", S),               # output-path sanitization
+        ("res/", b"", S),                                      # explicit directory entry
+        ("assets/A.bin", b"upper-case twin", S),               # case-only clash with assets/a.bin
+        ("assets/con.txt", b"dos device stem", S),
+        ("assets/" + "L" * 300 + ".bin", b"long segment", S),  # > 255-byte file name
+    ])
+    for n in ("classes3.dex", "lib/arm64-v8a/libf.so", "res/raw/f.bin", "assets/f.bin", "META-INF/F.SF", "data.bin"):
+        forge_cd_method(readers, n, 99)
+    for p in (dup, janus, cdforge, ctor, shortbad, tail, readers):
         print(p)
 
 

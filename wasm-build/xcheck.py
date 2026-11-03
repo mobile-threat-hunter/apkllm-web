@@ -9,8 +9,10 @@ Per APK: content_map (magic typing + checks), tamper_report (findings + checks) 
 install_gate's native dict + _container_checks for each arsc_scope / extractNativeLibs
 combination the UI can select (the Python install_gate wrapper derives arsc_scope from
 role facts; the demo takes the scope directly, so the core binding is called the same way
-wasm_module.cpp is).
+wasm_module.cpp is). Plus extract_report (the four-reader decompression plan) per case and
+extract_entry over every entry name — sha256 of the device-faithful bytes or the error.
 """
+import hashlib
 import json
 import sys
 
@@ -36,11 +38,44 @@ def gate(path, enl, tsdk, scope, page):
     return r
 
 
+def extract_report(path, enl, tsdk, scope, page):
+    """The REAL container.extract_report, fed the same core gate the demo uses (arsc_scope
+    given directly instead of derived from role facts)."""
+    def core_gate(p, **kw):
+        r = gate(p, enl, tsdk, scope, page)
+        if r.get("ok"):  # role echo is the Python wrapper's; never compared
+            r.update({k: r.get(k) for k in container.ROLE_ECHO_KEYS})
+        return r
+
+    real = container.install_gate
+    container.install_gate = core_gate
+    try:
+        return container.extract_report(path, extract_native_libs=enl, target_sdk=tsdk, page_size=page)
+    finally:
+        container.install_gate = real
+
+
+def extracted(path, names):
+    """extract_entry per unique name: sha256 of the device-faithful bytes, or the error."""
+    out = {}
+    for n in dict.fromkeys(names):
+        r = core.extract_entry(path, n, 512 * 1024 * 1024)
+        out[n] = (
+            {"ok": True, "disposition": r["disposition"], "size": len(r["data"]),
+             "sha256": hashlib.sha256(r["data"]).hexdigest()}
+            if r.get("ok") else {"ok": False, "error": r.get("error")}
+        )
+    return out
+
+
 def main(out, apks):
     res = {}
     for p in apks:
         c = container.content_map(p)
         t = container.tamper_report(p)
+        g0 = gate(p, None, None, None, 4096)
+        names = [e["name"] for e in g0["entries"]] if g0.get("ok") else [
+            e["name"] for e in (t.get("entries") or [])]
         res[p] = {
             "content": c,
             "tamper": t,
@@ -48,6 +83,11 @@ def main(out, apks):
                 f"{enl}|{tsdk}|{scope}|{page}": gate(p, enl, tsdk, scope, page)
                 for enl, tsdk, scope, page in GATE_CASES
             },
+            "extract_report": {
+                f"{enl}|{tsdk}|{scope}|{page}": extract_report(p, enl, tsdk, scope, page)
+                for enl, tsdk, scope, page in GATE_CASES
+            },
+            "extracted": extracted(p, names),
         }
     with open(out, "w") as f:
         json.dump(res, f, default=lambda o: list(o) if isinstance(o, (set, bytes)) else str(o))

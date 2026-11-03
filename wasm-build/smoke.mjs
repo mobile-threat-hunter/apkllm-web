@@ -23,8 +23,15 @@ const EXPECT_FINDINGS = {
   dup: ["duplicate_entry_name"],
   janus: ["janus", "cd_entry_count_mismatch"],
   cdforge: ["cd_lfh_method_mismatch", "method_forgery"],
+  readers: ["cd_lfh_method_mismatch", "method_forgery"],
 };
-const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true };
+// Four-reader rule on readers.apk: exactly the forged entries whose mapped reader is STRICT
+// fail extractEntry; the AssetManager ones are read raw (lenient_stored).
+const EXPECT_EXTRACT = {
+  readers: { rejected: ["META-INF/F.SF", "classes3.dex", "data.bin", "lib/arm64-v8a/libf.so"],
+             lenient: ["assets/f.bin", "res/raw/f.bin"] },
+};
+const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true, readers: true };
 
 const m = await createApkllm();
 console.log("engine loaded; SCHEME_V2 =", m.SCHEME_V2.toString(16));
@@ -116,6 +123,17 @@ for (const path of TESTS) {
     for (const id of EXPECT_FINDINGS[base]) if (!ids.has(id)) fail(`${base}.apk: expected finding ${id}, got ${JSON.stringify([...ids])}`);
   }
   if (ts.ok && EXPECT_WOULD_OPEN[base] !== undefined && ts.libziparchive_would_open !== EXPECT_WOULD_OPEN[base]) fail(`${base}.apk: would_open=${ts.libziparchive_would_open}`);
+  if (gate.ok && EXPECT_EXTRACT[base]) {
+    const rejected = [], lenient = [];
+    for (const e of gate.entries) {
+      const x = m.extractEntry(VFS, e.name, 512 * 1024 * 1024);
+      if (!x.ok) rejected.push(e.name); else if (x.disposition === "lenient_stored") lenient.push(e.name);
+    }
+    const want = EXPECT_EXTRACT[base];
+    if (JSON.stringify(rejected.sort()) !== JSON.stringify(want.rejected)) fail(`${base}.apk: extract rejected ${JSON.stringify(rejected)}`);
+    if (JSON.stringify(lenient.sort()) !== JSON.stringify(want.lenient)) fail(`${base}.apk: lenient_stored ${JSON.stringify(lenient)}`);
+    console.log("  four-reader extract: rejected", rejected.length, "lenient", lenient.length);
+  }
 }
 
 if (failures) { console.error(failures, "check(s) failed"); process.exit(1); }

@@ -12,7 +12,7 @@
      built from and -N counts rebuilds against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "644c9e7-2";
+window.__APKLLM_BUILD = "644c9e7-3";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -62,15 +62,25 @@ window.__APKLLM_BUILD = "644c9e7-2";
   .pill.na   { color:var(--fg-3); }
   main { flex:1; display:flex; flex-direction:column; min-height:0; }
   /* drop card */
-  #drop { display:flex; align-items:center; justify-content:center; flex:1; padding:24px; cursor:pointer; }
+  /* overflow:auto + the card's margin:auto: on a short viewport the card scrolls instead of
+     running under the footer, and is never clipped at the top */
+  #drop { display:flex; align-items:center; justify-content:center; flex:1; min-height:0; overflow:auto; padding:24px; cursor:pointer; }
   #drop input { display:none; }
+  /* the drop card — dashed box holding the logo + instructions (dexllm-web layout) */
   #dropcard {
-    width:min(560px, 100%); padding:40px 28px; text-align:center; border:1px dashed var(--line-3);
-    border-radius:14px; background:var(--bg-2); color:var(--fg-2); font-family:var(--f-ui);
+    display:flex; flex-direction:column; align-items:center; gap:10px; margin:auto;
+    width:max-content; max-width:90vw; padding:18px; text-align:center; border:1px dashed var(--line-3);
+    border-radius:14px; color:var(--fg-2); font-family:var(--f-ui);
     transition:border-color 160ms var(--e-out), background 160ms var(--e-out);
   }
+  #droplogo {
+    /* shrinks with a short viewport so the instructions stay visible */
+    width:min(300px, 72vw, max(120px, calc(100vh - 300px))); aspect-ratio:1/1; border-radius:10px;
+    display:block; object-fit:cover; background:#000; pointer-events:none;
+  }
+  @media (max-width:720px) { #droplogo { width:min(220px, 72vw, max(120px, calc(100vh - 300px))); } }
   #drop.drag #dropcard { border-color:var(--brand); background:var(--hl); color:var(--fg); }
-  #dropcard .big { font-size:17px; color:var(--fg); font-weight:600; margin-bottom:8px; }
+  #dropcard .big { font-size:17px; color:var(--fg); font-weight:600; }
   #dropcard .drophint { font-size:12px; color:var(--fg-3); }
   #dropcard #droploading { display:none; font-size:13px; color:var(--fg); }
   #drop.loading #droploading { display:block; }
@@ -127,6 +137,7 @@ window.__APKLLM_BUILD = "644c9e7-2";
   th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line-1); vertical-align:top; white-space:nowrap; }
   th { position:sticky; top:0; background:var(--bg-2); color:var(--fg-3); font:600 11px var(--f-ui); z-index:1; }
   td.name { white-space:normal; word-break:break-all; max-width:420px; color:var(--fg); }
+  #extract-table td.name { min-width:220px; }
   td.wrap { white-space:normal; max-width:520px; color:var(--fg-2); }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   th.num { text-align:right; }
@@ -152,12 +163,13 @@ window.__APKLLM_BUILD = "644c9e7-2";
 <body>
 <header>
   <h1><span>apkllm</span> · APK container</h1>
-  <span class="sub">real AOSP libziparchive in your browser — install gate · content · tamper scan · signing block</span>
+  <span class="sub">real AOSP libziparchive in your browser — install gate · extract · content · tamper scan · signing block</span>
   <span id="status">loading engine…</span>
 </header>
 <main>
 <label id="drop" for="file">
   <div id="dropcard">
+    <img id="droplogo" src="apkllm_logo.png" alt="APKLLM">
     <div class="big">Drop an APK here</div>
     <div class="drophint">or click to choose — nothing is uploaded, the container is read locally by the device's own ZIP reader</div>
     <div id="droploading"><span class="spin"></span>reading container…</div>
@@ -174,6 +186,7 @@ window.__APKLLM_BUILD = "644c9e7-2";
   </div>
   <div id="tabs">
     <div class="tab on" data-tab="gate">Install gate</div>
+    <div class="tab" data-tab="extract">Extract</div>
     <div class="tab" data-tab="content">Content</div>
     <div class="tab" data-tab="tamper">Tamper scan</div>
     <div class="tab" data-tab="signing">Signing block</div>
@@ -215,6 +228,36 @@ window.__APKLLM_BUILD = "644c9e7-2";
         <span class="count" id="gate-count"></span>
       </div>
       <div style="overflow:auto"><table id="gate-table"></table></div>
+    </div>
+  </section>
+
+  <!-- ── Extract ──────────────────────────────────────────────────── -->
+  <section class="panel" id="panel-extract">
+    <div class="card">
+      <h2>Decompression plan <span class="tiny">(four-reader model — which device reader consumes each entry, and how)</span></h2>
+      <div id="extract-summary"></div>
+      <p class="note">Bytes are materialized only by the entry's own mapped reader: method 8 → libziparchive inflate, 0 → stored copy; a forged method ∉ {0,8} is read raw only by the lenient <b>AssetManager</b> (manifest / resources), while the strict readers — <b>ART.DexFileLoader</b>, <b>NativeLibraryHelper</b>, generic <b>libziparchive</b> — reject it, so there is no faithful extraction and the entry is reported, not re-read with another reader's algorithm. The manifest inputs on the Install gate tab drive the plan.</p>
+    </div>
+    <div class="card">
+      <h2>Checks</h2>
+      <ul class="checks" id="extract-checks"></ul>
+    </div>
+    <div class="card">
+      <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract)</span></h2>
+      <div class="toolbar">
+        <input type="search" id="extract-filter" placeholder="filter by name…">
+        <span id="extract-chips"></span>
+        <span class="count" id="extract-count"></span>
+      </div>
+      <div class="toolbar">
+        <button id="x-sel-shown">select shown</button>
+        <button id="x-sel-none">clear selection</button>
+        <button id="x-bundle" disabled>extract selected (.zip)</button>
+        <button id="x-all">extract all (.zip)</button>
+        <button id="x-cancel" style="display:none">cancel</button>
+        <span class="count" id="x-status"></span>
+      </div>
+      <div style="overflow:auto"><table id="extract-table"></table></div>
     </div>
   </section>
 
@@ -292,6 +335,7 @@ const worker = new Worker("worker.js?v=" + window.__APKLLM_BUILD);
 const _pending = new Map(); let _wid = 1;
 worker.onmessage = e => {
   const p = _pending.get(e.data.id); if (!p) return;
+  if (e.data.progress) { p.onProgress?.(e.data.progress); return; }
   _pending.delete(e.data.id);
   if (e.data.ok) p.resolve(e.data.result); else p.reject(new Error(e.data.error));
 };
@@ -301,9 +345,9 @@ worker.onerror = e => {
   for (const p of _pending.values()) p.reject(new Error("worker crashed: " + (e.message || "unknown")));
   _pending.clear();
 };
-function wcall(msg, transfer) {
+function wcall(msg, transfer, onProgress) {
   const id = _wid++;
-  return new Promise((res, rej) => { _pending.set(id, { resolve: res, reject: rej }); worker.postMessage({ ...msg, id }, transfer || []); });
+  return new Promise((res, rej) => { _pending.set(id, { resolve: res, reject: rej, onProgress }); worker.postMessage({ ...msg, id }, transfer || []); });
 }
 wcall({ type: "init", buildSha: window.__APKLLM_BUILD })
   .then(() => { statusEl.innerHTML = "engine ready · <b>drop an APK</b>"; })
@@ -326,12 +370,14 @@ let loadGen = 0;
 
 async function loadFile(file) {
   const gen = ++loadGen;
+  worker.postMessage({ type: "cancel" });   // a running bundle for the previous APK stops instead of delaying this load
   drop.classList.remove("hidden"); drop.classList.add("loading");
   $("#app").classList.remove("on");
   statusEl.innerHTML = '<span class="spin"></span>reading ' + esc(file.name);
   // a new file starts with every filter/chip at its default (Content chips reset in renderContent)
   gateClassOn = new Set(CLASS_ORDER);
-  for (const id of ["#gate-filter", "#content-filter", "#tamper-filter"]) $(id).value = "";
+  xReaderOn = null; xSel = new Set(); $("#x-status").textContent = "";
+  for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#tamper-filter"]) $(id).value = "";
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (gen !== loadGen) return;
@@ -375,12 +421,12 @@ async function rerunGate() {
   try {
     const g = await wcall({ type: "gate", ...gateParams() });
     if (gen !== loadGen || report !== cur) return;   // a newer load replaced the APK meanwhile
-    report.gate = g; renderGate(); renderFilebar();
+    report.gate = g; renderGate(); renderExtract(); renderFilebar();
   } catch (e) { if (gen === loadGen) $("#gate-verdict").innerHTML = '<span class="err">' + esc(e.message) + "</span>"; }
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
-function renderAll() { renderFilebar(); renderGate(); renderContent(); renderTamper(); renderSigning(); }
+function renderAll() { renderFilebar(); renderGate(); renderExtract(); renderContent(); renderTamper(); renderSigning(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -453,23 +499,122 @@ function renderGateTable() {
       <td class="dim">${esc(e.gate)}</td>
       <td>${e.passes ? '<span class="pill ok">passes</span>' : e.conditional ? '<span class="pill warn">conditional</span>' : `<span class="pill bad">${e.install_fatal ? "install fatal" : "fails"}</span>`}</td>
       <td class="wrap">${esc(e.reason)}${e.needs.length ? ` <span class="tiny">needs: ${esc(e.needs.join(", "))}</span>` : ""}</td>
-      <td><button data-x="${esc(e.name)}" title="device-faithful bytes (method 8 inflate / 0 stored / else lenient raw)">bytes</button></td></tr>`).join("") + "</tbody>";
+      <td><button data-x="${esc(e.name)}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
   for (const b of $("#gate-table").querySelectorAll("button[data-x]")) b.addEventListener("click", () => extractAndSave(b.dataset.x, b));
 }
 
+const BYTES_TITLE = "device-faithful bytes from the entry's own reader (method 8 inflate / 0 stored / forged → AssetManager raw, strict readers reject)";
+function saveBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
 async function extractAndSave(name, btn) {
   btn.disabled = true;
   try {
     const r = await wcall({ type: "extract", name });
     if (!r.ok) { alert("extract failed: " + r.error); return; }
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([r.data]));
-    a.download = name.split("/").pop() || "entry.bin";
-    a.title = r.disposition;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    saveBlob(new Blob([r.data]), name.split("/").pop() || "entry.bin");
   } catch (e) { alert("extract failed: " + e.message); }
   finally { btn.disabled = false; }
+}
+
+// Extract -------------------------------------------------------------------
+const READER_ORDER = ["ART.DexFileLoader", "NativeLibraryHelper", "AssetManager", "libziparchive"];
+let xReaderOn = null, xSel = new Set(), xBusy = false;
+function renderExtract() {
+  const g = report.gate, x = g.ok ? g.extract : g;
+  if (!x.ok) {
+    $("#extract-summary").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(x.error)}</span>
+      <p class="note">libziparchive does not open this container, so no device reader can deliver any entry. The Tamper scan tab shows what the raw walk sees.</p>`;
+    $("#extract-checks").innerHTML = ""; $("#extract-table").innerHTML = ""; $("#extract-chips").innerHTML = ""; $("#extract-count").textContent = "";
+    syncExtractButtons();
+    return;
+  }
+  const s = x.summary;
+  const hist = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)} <span class="tiny">${n}</span>`).join(" · ");
+  $("#extract-summary").innerHTML = `<dl class="kv">
+    <dt>by reader</dt><dd>${hist(s.by_reader)}</dd>
+    <dt>by disposition</dt><dd>${hist(s.by_disposition)}</dd>
+    <dt>inflated on extract</dt><dd>${s.will_inflate} <span class="tiny">· stored ${s.stored_or_mmap}</span></dd>
+    <dt>method forged</dt><dd>${s.diverges}</dd>
+    <dt>undeliverable</dt><dd>${s.undeliverable ? `<span class="pill warn">${s.undeliverable}</span> <span class="tiny">strict reader rejects — extraction reports the reason instead of bytes</span>` : "0"}</dd>
+    <dt>device rejects</dt><dd>${s.device_rejected} <span class="tiny">(device_loads=false; still extracted when its reader can deliver)</span></dd>
+    <dt>inputs echoed</dt><dd>extractNativeLibs=${x.extract_native_libs ?? "unknown"} · targetSdk=${x.target_sdk ?? "unknown"} · page=${g.page_size}</dd>
+  </dl>`;
+  renderChecks($("#extract-checks"), x.checks);
+  if (!xReaderOn) xReaderOn = new Set(READER_ORDER);
+  $("#extract-chips").innerHTML = READER_ORDER.filter(r => s.by_reader[r]).map(r =>
+    `<span class="chip ${xReaderOn.has(r) ? "on" : ""}" data-r="${esc(r)}">${esc(r)}<span class="n">${s.by_reader[r]}</span></span>`).join(" ");
+  for (const ch of $("#extract-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
+    const r = ch.dataset.r; if (xReaderOn.has(r)) xReaderOn.delete(r); else xReaderOn.add(r);
+    ch.classList.toggle("on"); renderExtractTable();
+  });
+  // a re-run gate keeps the selection: it holds entry indices, and the entry order is the
+  // archive's, independent of the manifest inputs
+  for (const i of [...xSel]) if (i >= x.entries.length) xSel.delete(i);
+  renderExtractTable();
+}
+function shownExtractRows() {
+  const x = report.gate.extract, q = $("#extract-filter").value.toLowerCase();
+  return x.entries.map((e, i) => ({ e, i })).filter(({ e }) => xReaderOn.has(e.reader) && (!q || e.name.toLowerCase().includes(q)));
+}
+$("#extract-filter").addEventListener("input", () => { if (report?.gate.ok) renderExtractTable(); });
+function renderExtractTable() {
+  const x = report.gate.extract;
+  const rows = shownExtractRows();
+  $("#extract-count").textContent = rows.length + " / " + x.entries.length;
+  $("#extract-table").innerHTML = `<thead><tr><th></th><th>#</th><th>name</th><th>class</th><th>reader</th><th>method</th><th>disposition</th><th>device loads</th><th>deliverable</th><th>reason</th><th></th></tr></thead><tbody>` +
+    rows.map(({ e, i }) => `<tr class="${!e.deliverable || e.device_loads === false ? "fail" : e.device_loads === null ? "cond" : ""}">
+      <td><input type="checkbox" data-i="${i}" ${xSel.has(i) ? "checked" : ""}></td>
+      <td class="dim">${i}</td><td class="name">${esc(e.name)}</td><td>${e.class}</td><td>${esc(e.reader)}</td>
+      <td>${e.method}${e.diverges ? ' <span class="pill bad">forged</span>' : e.decompresses ? ' <span class="tiny">inflate</span>' : ""}</td>
+      <td>${esc(e.disposition)}</td><td>${tri(e.device_loads)}</td>
+      <td>${e.deliverable ? '<span class="pill ok">yes</span>' : '<span class="pill bad">rejected</span>'}</td>
+      <td class="wrap">${esc(e.reason)}</td>
+      <td><button data-i="${i}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
+  for (const cb of $("#extract-table").querySelectorAll("input[data-i]")) cb.addEventListener("change", () => {
+    const i = Number(cb.dataset.i);
+    if (cb.checked) xSel.add(i); else xSel.delete(i);
+    syncExtractButtons();
+  });
+  for (const b of $("#extract-table").querySelectorAll("button[data-i]")) b.addEventListener("click", () => extractAndSave(x.entries[Number(b.dataset.i)].name, b));
+  syncExtractButtons();
+}
+function syncExtractButtons() {
+  const ok = !!report?.gate.ok;
+  $("#x-bundle").disabled = xBusy || !ok || xSel.size === 0;
+  $("#x-bundle").textContent = `extract selected${xSel.size ? " (" + xSel.size + ")" : ""} (.zip)`;
+  $("#x-all").disabled = xBusy || !ok;
+  $("#x-sel-shown").disabled = $("#x-sel-none").disabled = xBusy || !ok;
+  $("#x-cancel").style.display = xBusy ? "" : "none";
+}
+$("#x-sel-shown").addEventListener("click", () => { for (const { i } of shownExtractRows()) xSel.add(i); renderExtractTable(); });
+$("#x-sel-none").addEventListener("click", () => { xSel.clear(); renderExtractTable(); });
+$("#x-bundle").addEventListener("click", () => extractBundle([...xSel]));
+$("#x-cancel").addEventListener("click", () => worker.postMessage({ type: "cancel" }));
+$("#x-all").addEventListener("click", () => extractBundle(report.gate.extract.entries.map((_, i) => i)));
+async function extractBundle(indices) {
+  if (!report || !indices.length) return;
+  const gen = loadGen, cur = report, st = $("#x-status");
+  xBusy = true; syncExtractButtons();
+  st.innerHTML = '<span class="spin"></span>extracting…';
+  try {
+    const r = await wcall({ type: "bundle", indices, source: cur.file, params: gateParams() }, [],
+      ({ done, total }) => { if (gen === loadGen) st.innerHTML = `<span class="spin"></span>extracting ${done} / ${total}…`; });
+    if (gen !== loadGen || report !== cur) return;
+    const base = cur.file.name.replace(/\.[^./]*$/, "") || "apk";
+    saveBlob(r.blob, base + ".extracted.zip");
+    const c = r.counts, parts = [`${c.files} file${c.files === 1 ? "" : "s"} extracted`];
+    if (c.directories) parts.push(`${c.directories} director${c.directories === 1 ? "y" : "ies"}`);
+    if (c.reader_rejected) parts.push(`<span class="err">${c.reader_rejected} rejected by their strict reader</span>`);
+    if (c.name_unaddressable) parts.push(`<span class="err">${c.name_unaddressable} not addressable by name (invalid UTF-8 name)</span>`);
+    if (c.extract_failed) parts.push(`<span class="err">${c.extract_failed} failed to extract</span>`);
+    st.innerHTML = parts.join(" · ") + ` · ${fmtSize(r.blob.size)}` + (c.files + c.directories < r.total ? ' <span class="tiny">(reasons in apkllm-extract.json)</span>' : "");
+  } catch (e) { if (gen === loadGen) st.innerHTML = '<span class="err">extract failed: ' + esc(e.message) + "</span>"; }
+  finally { xBusy = false; syncExtractButtons(); }
 }
 
 // Content ------------------------------------------------------------------

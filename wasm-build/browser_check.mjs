@@ -15,7 +15,7 @@ import { argv } from "node:process";
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const APK = resolve(argv[2]);
 const SHOT = argv[3];
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm" };
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".png": "image/png" };
 
 const server = createServer(async (req, res) => {
   const p = join(ROOT, decodeURIComponent(req.url.split("?")[0]).replace(/^\/$/, "/index.html"));
@@ -93,10 +93,68 @@ try {
   await evalJs(`(()=>{const tr=document.querySelector("#content-table tbody tr"); if(tr) tr.click(); return true;})()`);
   const hexLen = await evalJs(`(document.querySelector("#content-hex pre")||{textContent:""}).textContent.length`);
   if (gateOpened && hexLen === 0) fail("hex view empty");
-  if (SHOT) {
-    await evalJs(`document.querySelector('[data-tab="tamper"]').click(); true`);
-    const { result: { data } } = await S("Page.captureScreenshot", { format: "png" });
-    writeFileSync(SHOT, Buffer.from(data, "base64")); console.log("screenshot:", SHOT);
+  // Extract tab: plan rows, then "extract all" → capture the zip blob instead of downloading
+  // it, and check it against the plan inside the page (paths sanitized, every entry either
+  // a file or a recorded reader rejection, CRC of each stored file).
+  if (gateOpened) {
+    const xs = JSON.parse(await evalJs(`(async()=>{
+      document.querySelector('[data-tab="extract"]').click();
+      const rows = document.querySelectorAll("#extract-table tbody tr").length;
+      const plan = report.gate.extract;
+      let blob = null; const orig = window.saveBlob; window.saveBlob = (b, n) => { blob = b; window.__xname = n; };
+      document.querySelector("#x-all").click();
+      for (let t = 0; t < 600 && !blob; t++) await new Promise(r => setTimeout(r, 100));
+      window.saveBlob = orig;
+      if (!blob) return JSON.stringify({ rows, err: "no blob: " + document.querySelector("#x-status").textContent });
+      const b = new Uint8Array(await blob.arrayBuffer()), dv = new DataView(b.buffer);
+      const eocd = b.length - 22, n = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+      const td = new TextDecoder(), files = {}; let crcBad = 0;
+      const crc = (d) => { let c = ~0; for (const x of d) { c ^= x; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; } return ~c >>> 0; };
+      for (let i = 0; i < n; i++) {
+        const nl = dv.getUint16(p + 28, true), off = dv.getUint32(p + 42, true), size = dv.getUint32(p + 24, true), c = dv.getUint32(p + 16, true);
+        const name = td.decode(b.subarray(p + 46, p + 46 + nl)); p += 46 + nl;
+        const lnl = dv.getUint16(off + 26, true), data = b.subarray(off + 30 + lnl, off + 30 + lnl + size);
+        if (size < 1 << 20 && crc(data) !== c) crcBad++;
+        files[name] = data;
+      }
+      const man = JSON.parse(td.decode(files["apkllm-extract.json"]));
+      const bad = Object.keys(files).filter(f => f !== "apkllm-extract.json" && (!/^(files|collisions)\\//.test(f) || f.replace(/\\/$/, "").split("/").some(s => s === ".." || s === "." || s === "")));
+      const missing = man.entries.filter(e => e.kind === "file" && !(e.path in files)).length;
+      const unique = plan.entries.length;   // one manifest row per gate entry
+      const sorted = (xs) => JSON.stringify([...xs].sort());
+      const rejected = man.entries.filter(e => e.failure === "reader_rejected").map(e => e.name);
+      // four-reader rule: reader_rejected is exactly the plan's undeliverable set, minus entries
+      // the by-name lookup never reaches (name_unaddressable takes precedence)
+      const unaddressable = new Set(man.entries.filter(e => e.failure === "name_unaddressable").map(e => e.index));
+      const undeliverable = plan.entries.map((e, i) => ({ e, i })).filter(({ e, i }) => !e.deliverable && !unaddressable.has(i)).map(({ e }) => e.name);
+      const keyClash = Object.keys(files).length !== new Set(Object.keys(files).map(f => f.normalize("NFC").toLowerCase())).size;
+      const longSeg = Object.keys(files).some(f => f.split("/").some(sg => new TextEncoder().encode(sg).length > 255));
+      return JSON.stringify({ rows, zipEntries: n, counts: man.counts, total: man.entries.length, unique, bad, missing, crcBad, keyClash, longSeg,
+        rejectedOk: sorted(rejected) === sorted(undeliverable), uncaused: man.entries.filter(e => !e.ok && !e.failure).length,
+        failedNames: man.entries.filter(e => !e.ok).map(e => e.name + ":" + e.failure), status: document.querySelector("#x-status").textContent, fname: window.__xname });
+    })()`, 90000));
+    console.log("extract:", JSON.stringify(xs).slice(0, 400));
+    if (xs.err) fail(xs.err);
+    else {
+      if (xs.rows === 0) fail("extract table empty");
+      const c = xs.counts, covered = c.files + c.directories + c.reader_rejected + c.name_unaddressable + c.extract_failed;
+      // zip holds files + directory records + the manifest
+      if (xs.total !== xs.unique || covered !== xs.unique) fail(`bundle covers ${covered} (${xs.total} rows) of ${xs.unique} entries`);
+      if (xs.zipEntries !== c.files + c.directories + 1) fail("zip entry count ≠ files + directories + manifest");
+      if (xs.bad.length) fail("unsanitized output paths: " + xs.bad.join(", "));
+      if (xs.missing || xs.crcBad) fail(`manifest paths missing ${xs.missing} / crc mismatches ${xs.crcBad}`);
+      if (xs.keyClash) fail("two output paths collide on a case-insensitive filesystem");
+      if (xs.longSeg) fail("an output path segment exceeds 255 bytes");
+      if (!xs.rejectedOk) fail("reader_rejected set ≠ the plan's undeliverable set (four-reader rule)");
+      if (xs.uncaused) fail(`${xs.uncaused} failed rows without a failure cause`);
+    }
+  }
+  if (SHOT) {   // SHOT = the Tamper scan tab, SHOT with "-extract" before .png = the Extract tab
+    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")]]) {
+      await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
+      const { result: { data } } = await S("Page.captureScreenshot", { format: "png" });
+      writeFileSync(file, Buffer.from(data, "base64")); console.log("screenshot:", file);
+    }
   }
   // libziparchive's own ALOGW lines (stderr → console.error, "W tag: Zip: …") are
   // expected on tampered input and are not page errors.

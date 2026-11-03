@@ -8,8 +8,10 @@
 // Compares, per APK: content_map entries (content_type / category / detail /
 // unknown_kind / entropy / size_validated / encrypted_flag / role & extension
 // mismatch) + summary + checks; tamper_report findings + checks; install_gate
-// (native dict + checks) for every input combination xcheck.py ran. Any
+// (native dict + checks) and extract_report (four-reader plan) for every input
+// combination xcheck.py ran; extract_entry sha256 for every entry. Any
 // difference is a bug in the port (domain.js) or the binding (wasm_module.cpp).
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { argv } from "node:process";
@@ -69,7 +71,9 @@ for (const [path, n] of Object.entries(native)) {
     cmpChecks("content.checks", normChecks(c.checks), normChecks(n.content.checks));
     const nm = byName(n.content.entries);
     diff("content.names", [...byName(c.entries).keys()].sort(), [...nm.keys()].sort());
-    for (const e of c.entries) { const nn = (nm.get(e.name) || []).find(x => x.method === e.method && x.content_type === e.content_type) || (nm.get(e.name) || [])[0]; if (nn) cmpEntry(`content[${e.name}]`, e, nn); }
+    // names that decode alike (U+FFFD) have several candidates: compare against the closest one
+    const closest = (cands, e, keys) => cands.find(x => keys.every(k => JSON.stringify(x[k]) === JSON.stringify(e[k]))) || cands[0];
+    for (const e of c.entries) { const nn = closest(nm.get(e.name) || [], e, ["method", "content_type", "detail", "unknown_kind", "entropy", "size_validated"]); if (nn) cmpEntry(`content[${e.name}]`, e, nn); }
   } else diff("content.error", c.error, n.content.error);
 
   // tamper
@@ -94,10 +98,33 @@ for (const [path, n] of Object.entries(native)) {
     diff(`${w}.exceptions`, g.exceptions.map(i => g.entries[i].name).sort(), ng.exceptions.map(i => ng.entries[i].name).sort());
     const gm = byName(ng.entries);
     diff(`${w}.names`, [...byName(g.entries).keys()].sort(), [...gm.keys()].sort());
-    for (const e of g.entries) { const nn = (gm.get(e.name) || [])[0]; if (nn) diff(`${w}[${e.name}]`, e, nn); }
+    for (const e of g.entries) { const cs = gm.get(e.name) || []; const nn = cs.find(x => JSON.stringify(x) === JSON.stringify(e)) || cs[0]; if (nn) diff(`${w}[${e.name}]`, e, nn); }
     const normG = (cs) => cs.map(x => x.detail ? { ...x, detail: Object.fromEntries(Object.entries(x.detail).map(([k, v]) => [k, Array.isArray(v) ? [...v].sort() : v])) } : x);
     cmpChecks(`${w}.checks`, normG(D.containerChecks(g)), normG(ng.checks));
+
+    // four-reader decompression plan over the same gate
+    const nx = n.extract_report[key], x = D.extractReport(g), wx = `extract[${key}]`;
+    diff(`${wx}.ok`, x.ok, nx.ok);
+    if (!x.ok || !nx.ok) continue;
+    for (const k of ["extract_native_libs", "target_sdk", "entry_count"]) diff(`${wx}.${k}`, x[k], nx[k]);
+    const byNameList = (xs) => [...xs].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    const normX = (s) => ({ ...s, by_disposition: sortedObj(s.by_disposition), by_reader: sortedObj(s.by_reader) });
+    diff(`${wx}.summary`, normX(x.summary), normX(nx.summary));
+    const normXc = (cs) => cs.map(c => c.detail ? { ...c, detail: Object.fromEntries(Object.entries(c.detail).map(([k, v]) => [k, byNameList(v)])) } : c);
+    cmpChecks(`${wx}.checks`, normXc(x.checks), normXc(nx.checks));
+    const xm = byName(nx.entries);
+    const pick = (nn, e) => Object.fromEntries(Object.keys(e).map(k => [k, nn[k]]));
+    for (const e of x.entries) { const cs = xm.get(e.name) || []; const nn = cs.find(c => JSON.stringify(pick(c, e)) === JSON.stringify(e)) || cs[0]; if (nn) diff(`${wx}[${e.name}]`, e, pick(nn, e)); }
+    diff(`${wx}.keys`, Object.keys(x.entries[0] || {}).sort(), Object.keys(nx.entries[0] || {}).sort());
   }
+
+  // device-faithful bytes, every entry, via its own mapped reader
+  for (const [name, ne] of Object.entries(n.extracted)) {
+    const r = m.extractEntry(VFS, name, 512 * 1024 * 1024);
+    const we = r.ok ? { ok: true, disposition: r.disposition, size: r.data.length, sha256: createHash("sha256").update(r.data).digest("hex") } : { ok: false, error: r.error };
+    diff(`extracted[${name}]`, we, ne);
+  }
+  console.log(`  ${Object.keys(n.extracted).length} entries extracted & compared`);
 }
 
 if (diffs) { console.error(diffs, "difference(s)"); process.exit(1); }
