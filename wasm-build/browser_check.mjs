@@ -15,6 +15,7 @@ import { argv } from "node:process";
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const APK = resolve(argv[2]);
 const SHOT = argv[3];
+const base = APK.split("/").pop().replace(/\.apk$/, "");
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".png": "image/png" };
 
 const server = createServer(async (req, res) => {
@@ -155,6 +156,48 @@ try {
       if (xs.uncaused) fail(`${xs.uncaused} failed rows without a failure cause`);
     }
   }
+  // copy (dexllm-web "⧉ copy"): every card button yields "# apkllm-web …" text; entry tables
+  // are one TSV row per entry with a uniform column count whatever the names contain; hostile
+  // names come out escaped; clicking a name copies the REPORT's name byte-exact.
+  const cp = JSON.parse(await evalJs(`(async()=>{
+    const got = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t) => { got.push(t); } } });
+    const out = {};
+    for (const b of document.querySelectorAll("button.copybtn")) {
+      const n = got.length; b.click(); await new Promise(r => setTimeout(r, 30));
+      out[b.dataset.copy] = got.length > n ? got[got.length - 1] : null;
+    }
+    const shape = (k) => { if (out[k] == null) return null; const ls = out[k].split("\\n").slice(1); const w = ls[0].split("\\t").length;
+      return { rows: ls.length - 1, uniform: ls.every(l => l.split("\\t").length === w) }; };
+    // click-to-copy on every hostile name present, compared against the report data
+    const hostile = /[\\t\\n\\r"]|^[=+@-]/;
+    const clicks = [];
+    for (const el of document.querySelectorAll("#gate-table .copyable, #tamper-table .copyable")) {
+      const src = el.dataset.src, i = Number(el.dataset.i);
+      const want = src === "gate" ? report.gate.entries[i].name : report.tamper.entries[i].name;
+      if (!hostile.test(want)) continue;
+      const n = got.length; el.click(); await new Promise(r => setTimeout(r, 30));
+      clicks.push({ want, ok: got.length > n && got[got.length - 1] === want });
+    }
+    const gateTsv = out["gate-entries"] || "";
+    return JSON.stringify({ keys: Object.keys(out), nulls: Object.entries(out).filter(([k, v]) => v === null).map(([k]) => k),
+      noHeader: Object.entries(out).filter(([k, v]) => v !== null && !v.startsWith("# apkllm-web")).map(([k]) => k),
+      gate: shape("gate-entries"), extract: shape("extract-entries"), content: shape("content-entries"), tamper: shape("tamper-entries"),
+      gateN: report.gate.ok ? report.gate.entries.length : null, extractN: report.gate.ok ? report.gate.extract.entries.length : null,
+      contentN: report.content.ok ? report.content.entries.length : null, tamperN: report.tamper.ok ? report.tamper.entries.length : null,
+      hostileNames: report.gate.ok ? report.gate.entries.filter(e => hostile.test(e.name)).length : 0,
+      escapedTab: gateTsv.includes("assets/tab\\\\there\\\\nnewline.txt"), escapedCr: gateTsv.includes("assets/cr\\\\rname.txt"),
+      quoted: gateTsv.includes('\\t\\\\"lead.txt\\t'), formula: gateTsv.includes("\\t'=HYPERLINK(1)\\t"), clicks });
+  })()`));
+  console.log("copy:", JSON.stringify({ ...cp, keys: cp.keys.length }).slice(0, 400));
+  if (cp.keys.length < 14) fail(`only ${cp.keys.length} copy buttons`);
+  if (cp.nulls.length) fail("copy buttons that copied nothing: " + cp.nulls.join(", "));
+  if (cp.noHeader.length) fail("copy text without header: " + cp.noHeader.join(", "));
+  for (const [k, n] of [["gate", cp.gateN], ["extract", cp.extractN], ["content", cp.contentN], ["tamper", cp.tamperN]])
+    if (n !== null && (!cp[k] || cp[k].rows !== n || !cp[k].uniform)) fail(`${k} TSV ${JSON.stringify(cp[k])} for ${n} entries`);
+  if (cp.hostileNames && base === "readers" && !(cp.escapedTab && cp.escapedCr && cp.quoted && cp.formula)) fail("hostile names not escaped in the TSV: " + JSON.stringify(cp));
+  if (base === "readers" && cp.hostileNames < 4) fail("readers.apk lost its hostile-name fixtures");
+  for (const c of cp.clicks) if (!c.ok) fail("click-copy not byte-exact for " + JSON.stringify(c.want));
   if (SHOT) {   // SHOT = the Tamper scan tab, SHOT with "-extract" before .png = the Extract tab
     for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);

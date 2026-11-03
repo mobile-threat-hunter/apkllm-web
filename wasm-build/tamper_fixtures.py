@@ -18,7 +18,7 @@ No apkllm import. Shapes:
   readers.apk  every one of the four device readers, STORED / DEFLATED, plus a CD method
                forged to 99 per reader (strict readers reject, AssetManager reads raw)
                and the bundle's path cases: "../", a directory entry, a case-only twin,
-               a DOS device stem and a 300-byte segment
+               a DOS device stem, a 300-byte segment and tab/newline/CR/quote/formula names (copy)
 """
 import struct
 import sys
@@ -116,6 +116,10 @@ def main(out: Path):
         ("assets/A.bin", b"upper-case twin", S),               # case-only clash with assets/a.bin
         ("assets/con.txt", b"dos device stem", S),
         ("assets/" + "L" * 300 + ".bin", b"long segment", S),  # > 255-byte file name
+        ("assets/tab\there\nnewline.txt", b"tsv-hostile name", S),  # copy-as-TSV escaping
+        ("assets/cr\rname.txt", b"cr", S),                        # click-copy must stay byte-exact (DOM turns CR → LF)
+        ('"lead.txt', b"quote", S),                               # a leading quote must not open a sheet quoted field
+        ("=HYPERLINK(1)", b"formula", S),                         # must not paste as a live formula
     ])
     for n in ("classes3.dex", "lib/arm64-v8a/libf.so", "res/raw/f.bin", "assets/f.bin", "META-INF/F.SF", "data.bin"):
         forge_cd_method(readers, n, 99)

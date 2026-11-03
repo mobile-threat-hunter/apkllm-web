@@ -20,6 +20,13 @@ Same structure as [dexllm-web](https://github.com/mobile-threat-hunter/dexllm-we
 | **Tamper scan** | `tamperScan` — an own raw ZIP walk (not libziparchive) reporting where what is *present* diverges from what the device *consumes*: CD↔LFH mismatch, duplicate names, method forgery, Janus, second EOCD | `container._tamper_checks` |
 | **Signing block** | `locateSigningBlock` — EOCD / central directory / APK Signing Block location and scheme block ids (structural only) | — |
 
+**Copy.** As in dexllm-web, every card has a **⧉ copy** button that copies its whole
+dataset as tab-separated text (every entry, not just the filtered view); clicking an entry
+name or a finding's entry copies that name byte-exact from the report data. Names are
+attacker-controlled, so TSV cells escape `\\ \t \n \r \"` and U+0085/2028/2029 (one entry is
+one row for any line splitter, and a leading quote cannot open a spreadsheet quoted field),
+and a cell starting with `= + - @` gets a leading `'` so a pasted sheet never evaluates it.
+
 Manifest-owned inputs (`extractNativeLibs`, `targetSdk`, base-AssetManager membership)
 are parameters MMH gets from axmlllm; here you set them in the form. Unknown ⇒ the
 verdict stays conditional (`needs_manifest`), never guessed.

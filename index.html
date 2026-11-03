@@ -209,7 +209,24 @@ window.__APKLLM_BUILD = "644c9e7-3";
     margin:0 -16px 12px; padding:11px 16px; border-radius:12px 12px 0 0; font:600 11.5px/1.4 var(--f-ui); color:var(--fg); letter-spacing:0.04em; text-transform:uppercase;
     background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow:inset 0 -1px 0 var(--line-1);
   }
+  .card > h2 { display:flex; align-items:baseline; gap:6px; }
   .card > h2 .tiny { text-transform:none; letter-spacing:0.01em; margin-left:6px; font-weight:500; }
+  /* dexllm-web's "⧉ copy" — copies the card's whole dataset as tab-separated text */
+  button.copybtn {
+    margin-left:auto; flex:none; align-self:center; padding:3px 10px; border-radius:6px; cursor:pointer; user-select:none; white-space:nowrap;
+    border:1px solid var(--line-3); color:var(--fg-3); background:var(--bg-1); box-shadow:none;
+    font:600 10.5px/1.4 var(--f-ui); letter-spacing:0.02em; text-transform:none;
+    transition:background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  button.copybtn:hover:not(:disabled) { color:var(--fg); border-color:rgba(107,161,255,0.5); background:rgba(107,161,255,0.1); box-shadow:none; }
+  button.copybtn.copied { color:var(--good); border-color:var(--good); background:rgba(95,220,160,0.12); }
+  button.copybtn.copyfail { color:var(--warn); border-color:rgba(245,180,65,0.5); background:rgba(245,180,65,0.10); }
+  /* single items (entry names, finding entries) copy on click — dexllm-web's IoC pills */
+  .copyable { cursor:copy; border-radius:4px; transition:box-shadow 160ms var(--e-out), background 160ms var(--e-out); }
+  .copyable:hover { background:rgba(107,161,255,0.06); }
+  .copyable.copied { box-shadow:inset 0 0 0 1px var(--brand), 0 0 0 3px var(--brand-soft); }
+  .copyable.copyfail { box-shadow:inset 0 0 0 1px var(--warn); }
+  .hexhead { display:flex; align-items:center; gap:10px; margin-top:10px; }
   .card p.note { color:var(--fg-3); font:11.5px/1.55 var(--f-ui); margin:10px 0 0; }
   .card p.note b { color:var(--fg-2); }
   .kv { display:grid; grid-template-columns:max-content 1fr; gap:5px 18px; font-size:12px; }
@@ -331,15 +348,15 @@ window.__APKLLM_BUILD = "644c9e7-3";
       <p class="note">apkllm never parses the manifest (that is axmlllm's job in MMH). In MMH these values arrive from axmlllm; here you supply them. Unknown ⇒ the verdict stays an honest tri-state — nothing is guessed.</p>
     </div>
     <div class="card">
-      <h2>Container verdict</h2>
+      <h2>Container verdict<button class="copybtn" type="button" data-copy="gate-verdict" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="gate-verdict"></div>
     </div>
     <div class="card">
-      <h2>Checks</h2>
+      <h2>Checks<button class="copybtn" type="button" data-copy="gate-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <ul class="checks" id="gate-checks"></ul>
     </div>
     <div class="card">
-      <h2>Entries <span class="tiny">(every entry libziparchive enumerates — failing gates are highlighted, never hidden)</span></h2>
+      <h2>Entries <span class="tiny">(every entry libziparchive enumerates — failing gates are highlighted, never hidden)</span><button class="copybtn" type="button" data-copy="gate-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
         <input type="search" id="gate-filter" placeholder="filter by name…">
         <span id="gate-chips"></span>
@@ -352,16 +369,16 @@ window.__APKLLM_BUILD = "644c9e7-3";
   <!-- ── Extract ──────────────────────────────────────────────────── -->
   <section class="panel" id="panel-extract">
     <div class="card">
-      <h2>Decompression plan <span class="tiny">(four-reader model — which device reader consumes each entry, and how)</span></h2>
+      <h2>Decompression plan <span class="tiny">(four-reader model — which device reader consumes each entry, and how)</span><button class="copybtn" type="button" data-copy="extract-plan" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="extract-summary"></div>
       <p class="note">Bytes are materialized only by the entry's own mapped reader: method 8 → libziparchive inflate, 0 → stored copy; a forged method ∉ {0,8} is read raw only by the lenient <b>AssetManager</b> (manifest / resources), while the strict readers — <b>ART.DexFileLoader</b>, <b>NativeLibraryHelper</b>, generic <b>libziparchive</b> — reject it, so there is no faithful extraction and the entry is reported, not re-read with another reader's algorithm. The manifest inputs on the Install gate tab drive the plan.</p>
     </div>
     <div class="card">
-      <h2>Checks</h2>
+      <h2>Checks<button class="copybtn" type="button" data-copy="extract-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <ul class="checks" id="extract-checks"></ul>
     </div>
     <div class="card">
-      <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract)</span></h2>
+      <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract)</span><button class="copybtn" type="button" data-copy="extract-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
         <input type="search" id="extract-filter" placeholder="filter by name…">
         <span id="extract-chips"></span>
@@ -382,15 +399,15 @@ window.__APKLLM_BUILD = "644c9e7-3";
   <!-- ── Content ──────────────────────────────────────────────────── -->
   <section class="panel" id="panel-content">
     <div class="card">
-      <h2>Summary <span class="tiny">(first 512 device-produced bytes of each entry, typed by magic — the bytes' claim, never the name)</span></h2>
+      <h2>Summary <span class="tiny">(first 512 device-produced bytes of each entry, typed by magic — the bytes' claim, never the name)</span><button class="copybtn" type="button" data-copy="content-summary" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="content-summary"></div>
     </div>
     <div class="card">
-      <h2>Checks</h2>
+      <h2>Checks<button class="copybtn" type="button" data-copy="content-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <ul class="checks" id="content-checks"></ul>
     </div>
     <div class="card">
-      <h2>Entries</h2>
+      <h2>Entries<button class="copybtn" type="button" data-copy="content-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
         <input type="search" id="content-filter" placeholder="filter by name…">
         <span id="content-chips"></span>
@@ -404,19 +421,19 @@ window.__APKLLM_BUILD = "644c9e7-3";
   <!-- ── Tamper scan ──────────────────────────────────────────────── -->
   <section class="panel" id="panel-tamper">
     <div class="card">
-      <h2>Present vs consumed</h2>
+      <h2>Present vs consumed<button class="copybtn" type="button" data-copy="tamper-head" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="tamper-head"></div>
     </div>
     <div class="card">
-      <h2>Checks</h2>
+      <h2>Checks<button class="copybtn" type="button" data-copy="tamper-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <ul class="checks" id="tamper-checks"></ul>
     </div>
     <div class="card">
-      <h2>Findings</h2>
+      <h2>Findings<button class="copybtn" type="button" data-copy="tamper-findings" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="tamper-findings"></div>
     </div>
     <div class="card">
-      <h2>Raw walk <span class="tiny">(own ZIP reader, not libziparchive — Central Directory vs Local File Header; a divergent LFH field is red)</span></h2>
+      <h2>Raw walk <span class="tiny">(own ZIP reader, not libziparchive — Central Directory vs Local File Header; a divergent LFH field is red)</span><button class="copybtn" type="button" data-copy="tamper-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
         <input type="search" id="tamper-filter" placeholder="filter by name…">
         <span class="count" id="tamper-count"></span>
@@ -428,7 +445,7 @@ window.__APKLLM_BUILD = "644c9e7-3";
   <!-- ── Signing block ────────────────────────────────────────────── -->
   <section class="panel" id="panel-signing">
     <div class="card">
-      <h2>ZIP tail &amp; APK Signing Block <span class="tiny">(structural location only — verification is Java apksig, outside this demo)</span></h2>
+      <h2>ZIP tail &amp; APK Signing Block <span class="tiny">(structural location only — verification is Java apksig, outside this demo)</span><button class="copybtn" type="button" data-copy="signing" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="signing-body"></div>
     </div>
   </section>
@@ -630,7 +647,7 @@ function renderGateTable() {
   $("#gate-count").textContent = rows.length + " / " + g.entries.length;
   $("#gate-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>class</th><th>method</th><th class="num">size</th><th class="num">compressed</th><th class="num">offset</th><th>4K</th><th>16K</th><th>gate</th><th>verdict</th><th>reason</th><th></th></tr></thead><tbody>` +
     rows.map(({ e, i }) => `<tr class="${!e.passes ? (e.conditional ? "cond" : "fail") : ""}">
-      <td class="dim">${i}</td><td class="name">${esc(e.name)}${e.primary_multidex ? ' <span class="pill info">ART auto-load</span>' : ""}</td>
+      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="gate" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span>${e.primary_multidex ? ' <span class="pill info">ART auto-load</span>' : ""}</td>
       <td>${e.class}</td><td>${e.method}${e.method_known ? "" : ' <span class="pill bad">forged</span>'}${e.has_data_descriptor ? ' <span class="tiny">DD</span>' : ""}</td>
       <td class="num">${e.uncompressed_size}</td><td class="num">${e.compressed_size}</td><td class="num">${hex(e.data_offset)}</td>
       <td>${e.aligned_4k ? "✓" : "·"}</td><td>${e.aligned_16k ? "✓" : "·"}</td>
@@ -707,7 +724,7 @@ function renderExtractTable() {
   $("#extract-table").innerHTML = `<thead><tr><th></th><th>#</th><th>name</th><th>class</th><th>reader</th><th>method</th><th>disposition</th><th>device loads</th><th>deliverable</th><th>reason</th><th></th></tr></thead><tbody>` +
     rows.map(({ e, i }) => `<tr class="${!e.deliverable || e.device_loads === false ? "fail" : e.device_loads === null ? "cond" : ""}">
       <td><input type="checkbox" data-i="${i}" ${xSel.has(i) ? "checked" : ""}></td>
-      <td class="dim">${i}</td><td class="name">${esc(e.name)}</td><td>${e.class}</td><td>${esc(e.reader)}</td>
+      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="extract" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span></td><td>${e.class}</td><td>${esc(e.reader)}</td>
       <td>${e.method}${e.diverges ? ' <span class="pill bad">forged</span>' : e.decompresses ? ' <span class="tiny">inflate</span>' : ""}</td>
       <td>${esc(e.disposition)}</td><td>${tri(e.device_loads)}</td>
       <td>${e.deliverable ? '<span class="pill ok">yes</span>' : '<span class="pill bad">rejected</span>'}</td>
@@ -789,7 +806,7 @@ function renderContentTable() {
   $("#content-count").textContent = rows.length + " / " + c.entries.length;
   $("#content-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>class</th><th>reader</th><th>content</th><th>category</th><th>detail</th><th class="num">entropy</th><th>size ok</th><th>flags</th></tr></thead><tbody>` +
     rows.map(({ e, i }) => `<tr data-i="${i}" class="${e.role_mismatch === true || e.extension_mismatch === true ? "flag" : ""}">
-      <td class="dim">${i}</td><td class="name">${esc(e.name)}</td><td>${e.class}</td>
+      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="content" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span></td><td>${e.class}</td>
       <td>${e.disposition}${e.error ? ` <span class="err" title="${esc(e.error)}">!</span>` : ""}</td>
       <td>${esc(e.content_type)}${e.unknown_kind ? ` <span class="tiny">${e.unknown_kind}</span>` : ""}</td>
       <td class="dim">${esc(e.category)}</td>
@@ -799,7 +816,7 @@ function renderContentTable() {
       <td>${e.role_mismatch === true ? '<span class="pill bad">role ≠ content</span>' : e.role_mismatch === null ? '<span class="pill na">role ?</span>' : ""}
           ${e.extension_mismatch === true ? '<span class="pill warn">ext ≠ content</span>' : e.extension_mismatch === null ? '<span class="pill na">ext ?</span>' : ""}
           ${e.encrypted_flag ? '<span class="pill warn">gpbf encrypted</span>' : ""}</td></tr>`).join("") + "</tbody>";
-  for (const tr of $("#content-table").querySelectorAll("tr[data-i]")) tr.addEventListener("click", () => showHead(Number(tr.dataset.i), tr));
+  for (const tr of $("#content-table").querySelectorAll("tr[data-i]")) tr.addEventListener("click", (e) => { if (!e.target.closest(".copyable")) showHead(Number(tr.dataset.i), tr); });
 }
 function showHead(i, tr) {
   $("#content-table").querySelectorAll("tr.sel").forEach(x => x.classList.remove("sel"));
@@ -813,8 +830,108 @@ function showHead(i, tr) {
     const as = Array.from(chunk, x => x >= 0x20 && x < 0x7f ? String.fromCharCode(x) : ".").join("");
     out += o.toString(16).padStart(8, "0") + "  " + hx + "  " + as + "\n";
   }
-  $("#content-hex").innerHTML = `<div class="tiny" style="margin-top:8px">${esc(h.name)} — first ${b.length} bytes as its ${h.disposition} reader produced them${h.complete ? " (whole entry)" : ""}</div><pre class="hex">${esc(out) || "(empty)"}</pre>`;
+  $("#content-hex").dataset.i = i;
+  $("#content-hex").innerHTML = `<div class="hexhead"><span class="tiny">${esc(h.name)} — first ${b.length} bytes as its ${h.disposition} reader produced them${h.complete ? " (whole entry)" : ""}</span><button class="copybtn" type="button" data-copy="content-hex" title="Copy this hex dump as text">⧉ copy</button></div><pre class="hex">${esc(out) || "(empty)"}</pre>`;
 }
+
+// Copy ---------------------------------------------------------------------
+// dexllm-web's copy buttons: each card copies its WHOLE dataset (every entry, not just the
+// filtered view — analyzer, not gatekeeper) as tab-separated text; a single item (entry
+// name, finding entry) copies on click, byte-exact from the report data (never from the
+// rendered DOM, whose HTML parser turns CR into LF and drops NUL).
+// TSV cells: entry names are attacker-controlled, so every cell (JSON ones included) is
+// escaped \\ \t \n \r \" and U+0085/2028/2029 → \uXXXX — one entry is one row for any line
+// splitter and a leading quote cannot open a spreadsheet quoted field; a cell starting with
+// = + - @ (that is not a number) gets a leading ' so a pasted sheet never evaluates it.
+function _copyFallback(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    const prev = document.activeElement;
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand("copy"); document.body.removeChild(ta);
+    prev?.focus?.();
+    return ok;
+  } catch (_) { return false; }
+}
+function flashEl(el, label, cls) {
+  if (!el) return;
+  el.classList.remove("copied", "copyfail"); el.classList.add(cls);
+  if (el.classList.contains("copybtn")) { el.dataset.label ??= el.textContent; el.textContent = label; }
+  clearTimeout(el._copyT);
+  el._copyT = setTimeout(() => { el.classList.remove(cls); if (el.dataset.label) el.textContent = el.dataset.label; }, 1200);
+}
+function copyText(text, el) {
+  if (!text) { flashEl(el, "nothing to copy", "copyfail"); return; }
+  const ok = () => flashEl(el, "copied ✓", "copied"), bad = () => flashEl(el, "copy failed", "copyfail");
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(ok).catch(() => { if (_copyFallback(text)) ok(); else bad(); });
+  else if (_copyFallback(text)) ok(); else bad();
+}
+const escCell = (str) => str.replace(/[\\\t\n\r"\u0085\u2028\u2029]/g, c => ({ "\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r", '"': '\\"' })[c] ?? "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+const cell = (v) => {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  const s = escCell(typeof v === "object" ? JSON.stringify(v) : String(v));
+  return /^[=+\-@]/.test(s) && !/^[+-]?\d/.test(s) ? "'" + s : s;
+};
+const tsv = (head, rows) => [head.join("\t"), ...rows.map(r => r.map(cell).join("\t"))].join("\n");
+const tri3 = (v) => v === true ? "true" : v === false ? "false" : "unknown";
+function kvText(el) {   // a rendered <dl class="kv"> → "key \t value" lines (labels + summaries only, no names)
+  return [...el.querySelectorAll("dl.kv > dt")].map(dt => dt.textContent.trim() + "\t" + (dt.nextElementSibling?.textContent || "").replace(/\s+/g, " ").trim()).join("\n");
+}
+const checksText = (checks) => tsv(["ok", "id", "severity", "reason", "detail"], (checks || []).map(c => [tri3(c.ok), c.id, c.severity, c.reason, c.detail ?? ""]));
+// an ok:false part copies its reason instead of nothing
+const unavailable = (r, what) => `${what}\t${cell(r.error)}`;
+const COPY = {
+  "gate-verdict": () => report.gate.ok ? kvText($("#gate-verdict")) || $("#gate-verdict").textContent.trim() : unavailable(report.gate, "libziparchive refused to open"),
+  "gate-checks": () => report.gate.ok ? checksText(report.gate.checks) : unavailable(report.gate, "libziparchive refused to open"),
+  "gate-entries": () => report.gate.ok ? tsv(["#", "name", "class", "method", "uncompressed", "compressed", "data_offset", "aligned_4k", "aligned_16k", "primary_multidex", "gate", "passes", "conditional", "install_fatal", "reason", "needs"],
+    report.gate.entries.map((e, i) => [i, e.name, e.class, e.method, e.uncompressed_size, e.compressed_size, e.data_offset, e.aligned_4k, e.aligned_16k, e.primary_multidex, e.gate, e.passes, e.conditional, e.install_fatal, e.reason, e.needs.join(", ")])) : unavailable(report.gate, "libziparchive refused to open"),
+  "extract-plan": () => report.gate.ok ? kvText($("#extract-summary")) : unavailable(report.gate, "unavailable"),
+  "extract-checks": () => report.gate.ok ? checksText(report.gate.extract.checks) : unavailable(report.gate, "unavailable"),
+  "extract-entries": () => report.gate.ok ? tsv(["#", "name", "class", "reader", "method", "disposition", "device_loads", "deliverable", "decompresses", "diverges", "reason"],
+    report.gate.extract.entries.map((e, i) => [i, e.name, e.class, e.reader, e.method, e.disposition, tri3(e.device_loads), e.deliverable, e.decompresses, e.diverges, e.reason])) : unavailable(report.gate, "unavailable"),
+  "content-summary": () => report.content.ok ? kvText($("#content-summary")) : unavailable(report.content, "unavailable"),
+  "content-checks": () => report.content.ok ? checksText(report.content.checks) : unavailable(report.content, "unavailable"),
+  "content-entries": () => report.content.ok ? tsv(["#", "name", "class", "read", "content_type", "unknown_kind", "category", "detail", "entropy", "size_validated", "role_mismatch", "extension_mismatch", "encrypted_flag", "error"],
+    report.content.entries.map((e, i) => [i, e.name, e.class, e.disposition, e.content_type, e.unknown_kind ?? "", e.category, Object.keys(e.detail).length ? e.detail : "", e.entropy, e.size_validated, tri3(e.role_mismatch), tri3(e.extension_mismatch), e.encrypted_flag, e.error ?? ""])) : unavailable(report.content, "unavailable"),
+  "content-hex": () => {
+    const i = Number($("#content-hex").dataset.i), h = report.content.heads?.[i];
+    if (!h) return "";
+    return `entry\t${cell(h.name)}\nread\t${h.disposition}\nbytes\t${h.head.length}${h.complete ? " (whole entry)" : ""}\n` + ($("#content-hex pre.hex")?.textContent || "");
+  },
+  "tamper-head": () => report.tamper.ok ? kvText($("#tamper-head")) : unavailable(report.tamper, "raw walk failed"),
+  "tamper-checks": () => report.tamper.ok ? checksText(report.tamper.checks) : unavailable(report.tamper, "raw walk failed"),
+  "tamper-findings": () => report.tamper.ok ? tsv(["severity", "id", "entry", "detail"], report.tamper.findings.map(f => [f.severity, f.id, f.entry || "(whole file)", f.detail])) : unavailable(report.tamper, "raw walk failed"),
+  "tamper-entries": () => report.tamper.ok ? tsv(["name", "cd_record_offset", "lfh_offset", "lfh_present", "cd_method", "lfh_method", "cd_gpbf", "lfh_gpbf", "cd_crc32", "lfh_crc32", "cd_compressed_size", "lfh_compressed_size", "cd_uncompressed_size", "lfh_uncompressed_size", "has_data_descriptor"],
+    report.tamper.entries.map(e => [e.name, e.cd_record_offset, e.lfh_offset, e.lfh_present, e.cd_method, e.lfh_method, hex(e.cd_gpbf, 4), hex(e.lfh_gpbf, 4), hex(e.cd_crc32, 8), hex(e.lfh_crc32, 8), e.cd_compressed_size, e.lfh_compressed_size, e.cd_uncompressed_size, e.lfh_uncompressed_size, e.has_data_descriptor])) : unavailable(report.tamper, "raw walk failed"),
+  "signing": () => { const s = report.signing; if (!s.ok) return unavailable(s, s.is_zip === false ? "no EOCD — not a ZIP" : "failed");
+    return kvText($("#signing-body")) + (s.has_signing_block ? "\n\n" + tsv(["id", "scheme", "value_offset", "value_size"], s.scheme_blocks.map(b => [hex(b.id, 8), SCHEME_NAMES[b.id] || "unknown block id", hex(b.value_offset), b.value_size])) : ""); },
+};
+// the name a click-to-copy item stands for, straight from the report (byte-exact)
+const ITEM = {
+  gate: (i) => report.gate.entries?.[i]?.name, extract: (i) => report.gate.extract?.entries?.[i]?.name,
+  content: (i) => report.content.entries?.[i]?.name, tamper: (i) => report.tamper.entries?.[i]?.name,
+  finding: (i) => report.tamper.findings?.[i]?.entry,
+};
+const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", tamper: "Tamper scan", signing: "Signing block" };
+// one delegated listener: card buttons + click-to-copy items (rows re-render, so no per-node wiring)
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button.copybtn");
+  if (btn) {
+    if (!report) return;
+    const body = COPY[btn.dataset.copy]?.();
+    const tab = TAB_TITLE[btn.closest(".panel")?.id.replace("panel-", "")] || "";
+    const card = btn.dataset.copy === "content-hex" ? "Hex head" : (btn.closest("h2")?.firstChild?.textContent.trim() || btn.dataset.copy);
+    copyText(body ? `# apkllm-web · ${tab} · ${card} · ${cell(report.file.name)}\n` + body : "", btn);
+    return;
+  }
+  const item = e.target.closest(".copyable");
+  if (item && report && !window.getSelection()?.toString()) {
+    const name = ITEM[item.dataset.src]?.(Number(item.dataset.i));
+    if (typeof name === "string") copyText(name, item);
+  }
+});
 
 // Tamper -------------------------------------------------------------------
 function renderTamper() {
@@ -830,9 +947,9 @@ function renderTamper() {
     <dt>APK Signing Block</dt><dd>${t.signing_block_present ? "present" : "absent"}</dd>
   </dl>`;
   renderChecks($("#tamper-checks"), t.checks);
-  $("#tamper-findings").innerHTML = t.findings.length ? t.findings.map(f => `
+  $("#tamper-findings").innerHTML = t.findings.length ? t.findings.map((f, fi) => `
     <div class="finding"><span class="fid sev-${esc(f.severity)}">${esc(f.id)}</span><span class="pill ${f.severity === "tamper" ? "bad" : f.severity === "suspicious" ? "warn" : "info"}">${esc(f.severity)}</span>
-      <span class="fentry">${esc(f.entry || "(whole file)")}</span><div class="fdetail">${esc(f.detail)}</div></div>`).join("")
+      <span class="fentry${f.entry ? " copyable" : ""}"${f.entry ? ` data-src="finding" data-i="${fi}" title="click to copy the entry name"` : ""}>${esc(f.entry || "(whole file)")}</span><div class="fdetail">${esc(f.detail)}</div></div>`).join("")
     : '<span class="tiny">no present-vs-consumed divergence</span>';
   renderTamperTable();
 }
@@ -840,13 +957,13 @@ $("#tamper-filter").addEventListener("input", renderTamperTable);
 function renderTamperTable() {
   const t = report.tamper; if (!t.ok) return;
   const q = $("#tamper-filter").value.toLowerCase();
-  const rows = t.entries.filter(e => !q || e.name.toLowerCase().includes(q));
+  const rows = t.entries.map((e, i) => ({ e, i })).filter(({ e }) => !q || e.name.toLowerCase().includes(q));
   $("#tamper-count").textContent = rows.length + " / " + t.entries.length;
   const cell = (cd, lfh, present, fmt = (x) => x) => `<td class="num">${fmt(cd)}</td><td class="num ${present ? (cd !== lfh ? "diff" : "") : "dim"}">${present ? fmt(lfh) : "—"}</td>`;
   $("#tamper-table").innerHTML = `<thead><tr><th>name</th><th class="num">CD rec</th><th class="num">LFH @</th><th>LFH</th>
       <th class="num">method CD</th><th class="num">LFH</th><th class="num">gpbf CD</th><th class="num">LFH</th><th class="num">crc CD</th><th class="num">LFH</th>
       <th class="num">csize CD</th><th class="num">LFH</th><th class="num">usize CD</th><th class="num">LFH</th><th>DD</th></tr></thead><tbody>` +
-    rows.map(e => `<tr class="${!e.lfh_present ? "fail" : ""}"><td class="name">${esc(e.name)}</td><td class="num">${hex(e.cd_record_offset)}</td><td class="num">${hex(e.lfh_offset)}</td>
+    rows.map(({ e, i }) => `<tr class="${!e.lfh_present ? "fail" : ""}"><td class="name"><span class="copyable" data-src="tamper" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span></td><td class="num">${hex(e.cd_record_offset)}</td><td class="num">${hex(e.lfh_offset)}</td>
       <td>${e.lfh_present ? "✓" : '<span class="pill bad">missing</span>'}</td>
       ${cell(e.cd_method, e.lfh_method, e.lfh_present)}${cell(e.cd_gpbf, e.lfh_gpbf, e.lfh_present, x => hex(x, 4))}${cell(e.cd_crc32, e.lfh_crc32, e.lfh_present, x => hex(x, 8))}
       ${cell(e.cd_compressed_size, e.lfh_compressed_size, e.lfh_present)}${cell(e.cd_uncompressed_size, e.lfh_uncompressed_size, e.lfh_present)}
