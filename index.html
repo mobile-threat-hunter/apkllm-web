@@ -268,6 +268,7 @@ window.__APKLLM_BUILD = "644c9e7-3";
   tbody tr:not(.fail):not(.cond):not(.flag):not(.sel):hover td { background:rgba(255,255,255,0.025); }
   td.name { white-space:normal; word-break:break-all; max-width:420px; color:var(--fg); }
   #extract-table td.name { min-width:220px; }
+  #extract-table tbody tr.busy td { opacity:0.55; }
   td.wrap { white-space:normal; max-width:520px; color:var(--fg-2); }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   th.num { text-align:right; }
@@ -378,7 +379,7 @@ window.__APKLLM_BUILD = "644c9e7-3";
       <ul class="checks" id="extract-checks"></ul>
     </div>
     <div class="card">
-      <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract)</span><button class="copybtn" type="button" data-copy="extract-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract, or double-click a row to download it)</span><button class="copybtn" type="button" data-copy="extract-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
         <input type="search" id="extract-filter" placeholder="filter by name…">
         <span id="extract-chips"></span>
@@ -654,8 +655,9 @@ function renderGateTable() {
       <td class="dim">${esc(e.gate)}</td>
       <td>${e.passes ? '<span class="pill ok">passes</span>' : e.conditional ? '<span class="pill warn">conditional</span>' : `<span class="pill bad">${e.install_fatal ? "install fatal" : "fails"}</span>`}</td>
       <td class="wrap">${esc(e.reason)}${e.needs.length ? ` <span class="tiny">needs: ${esc(e.needs.join(", "))}</span>` : ""}</td>
-      <td><button data-x="${esc(e.name)}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
-  for (const b of $("#gate-table").querySelectorAll("button[data-x]")) b.addEventListener("click", () => extractAndSave(b.dataset.x, b));
+      <td><button data-i="${i}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
+  // by index, not a name attribute: the HTML parser turns CR in an attribute into LF
+  for (const b of $("#gate-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2) extractAndSave(g.entries[Number(b.dataset.i)].name, b); });
 }
 
 const BYTES_TITLE = "device-faithful bytes from the entry's own reader (method 8 inflate / 0 stored / forged → AssetManager raw, strict readers reject)";
@@ -666,14 +668,31 @@ function saveBlob(blob, filename) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
-async function extractAndSave(name, btn) {
-  btn.disabled = true;
+// One entry → its own mapped device reader (engine extractEntry) → a download. `el` is the
+// trigger (a "bytes" button or an Extract-table row), styled busy while in flight; with
+// `statusEl` the outcome is reported there instead of an alert(). In-flight entries are kept
+// by name (a table re-render replaces the row, so a flag on the DOM node would be lost), and a
+// result that comes back after another APK was loaded is dropped — no stale download or status.
+const extracting = new Set();
+async function extractAndSave(name, el, statusEl) {
+  if (extracting.has(name)) return;
+  const gen = loadGen;
+  extracting.add(name); el.classList.add("busy"); if (el.tagName === "BUTTON") el.disabled = true;
+  const live = () => gen === loadGen;
+  const say = (html) => { if (statusEl && live()) statusEl.innerHTML = html; };
+  const tell = (msg, html) => statusEl ? say(html) : live() && alert(msg);
+  const fail = (msg) => tell("extract failed: " + msg, `<span class="err">${esc(name)}: ${esc(msg)}</span>`);
+  say(`<span class="spin"></span>extracting ${esc(name)}…`);
   try {
     const r = await wcall({ type: "extract", name });
-    if (!r.ok) { alert("extract failed: " + r.error); return; }
-    saveBlob(new Blob([r.data]), name.split("/").pop() || "entry.bin");
-  } catch (e) { alert("extract failed: " + e.message); }
-  finally { btn.disabled = false; }
+    if (!live()) return;
+    if (!r.ok) { fail(r.error); return; }
+    if (name.endsWith("/") && r.data.length === 0) { tell(name + " is a directory entry — nothing to download", `${esc(name)} is a directory entry — nothing to download`); return; }
+    const file = name.split("/").pop() || "entry.bin";
+    saveBlob(new Blob([r.data]), file);
+    say(`⇣ ${esc(file)} · ${esc(r.disposition)} by its reader · ${fmtSize(r.data.length)}`);
+  } catch (e) { fail(e.message); }
+  finally { extracting.delete(name); el.classList.remove("busy"); if (el.tagName === "BUTTON") el.disabled = false; }
 }
 
 // Extract -------------------------------------------------------------------
@@ -722,7 +741,7 @@ function renderExtractTable() {
   const rows = shownExtractRows();
   $("#extract-count").textContent = rows.length + " / " + x.entries.length;
   $("#extract-table").innerHTML = `<thead><tr><th></th><th>#</th><th>name</th><th>class</th><th>reader</th><th>method</th><th>disposition</th><th>device loads</th><th>deliverable</th><th>reason</th><th></th></tr></thead><tbody>` +
-    rows.map(({ e, i }) => `<tr class="${!e.deliverable || e.device_loads === false ? "fail" : e.device_loads === null ? "cond" : ""}">
+    rows.map(({ e, i }) => `<tr data-i="${i}" title="double-click to extract with its reader and download" class="${!e.deliverable || e.device_loads === false ? "fail" : e.device_loads === null ? "cond" : ""}">
       <td><input type="checkbox" data-i="${i}" ${xSel.has(i) ? "checked" : ""}></td>
       <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="extract" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span></td><td>${e.class}</td><td>${esc(e.reader)}</td>
       <td>${e.method}${e.diverges ? ' <span class="pill bad">forged</span>' : e.decompresses ? ' <span class="tiny">inflate</span>' : ""}</td>
@@ -735,7 +754,7 @@ function renderExtractTable() {
     if (cb.checked) xSel.add(i); else xSel.delete(i);
     syncExtractButtons();
   });
-  for (const b of $("#extract-table").querySelectorAll("button[data-i]")) b.addEventListener("click", () => extractAndSave(x.entries[Number(b.dataset.i)].name, b));
+  for (const b of $("#extract-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2 && !xBusy) extractAndSave(x.entries[Number(b.dataset.i)].name, b, $("#x-status")); });
   syncExtractButtons();
 }
 function syncExtractButtons() {
@@ -746,6 +765,15 @@ function syncExtractButtons() {
   $("#x-sel-shown").disabled = $("#x-sel-none").disabled = xBusy || !ok;
   $("#x-cancel").style.display = xBusy ? "" : "none";
 }
+// double-click a row → extract that entry with its own reader and download it (a rejected
+// entry reports its reader's reason). The checkbox and the bytes button keep their own clicks.
+$("#extract-table").addEventListener("dblclick", (e) => {
+  if (!report?.gate.ok || xBusy || e.target.closest("input, button")) return;   // not during a bundle
+  const tr = e.target.closest("tbody tr[data-i]"); if (!tr) return;
+  window.getSelection()?.removeAllRanges();   // a double-click selects a word; drop it
+  clearTimeout(pendingCopy);                  // …and the name click it began is not a copy
+  extractAndSave(report.gate.extract.entries[Number(tr.dataset.i)].name, tr, $("#x-status"));
+});
 $("#x-sel-shown").addEventListener("click", () => { for (const { i } of shownExtractRows()) xSel.add(i); renderExtractTable(); });
 $("#x-sel-none").addEventListener("click", () => { xSel.clear(); renderExtractTable(); });
 $("#x-bundle").addEventListener("click", () => extractBundle([...xSel]));
@@ -915,6 +943,7 @@ const ITEM = {
   finding: (i) => report.tamper.findings?.[i]?.entry,
 };
 const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", tamper: "Tamper scan", signing: "Signing block" };
+let pendingCopy = 0;
 // one delegated listener: card buttons + click-to-copy items (rows re-render, so no per-node wiring)
 document.addEventListener("click", (e) => {
   const btn = e.target.closest("button.copybtn");
@@ -927,9 +956,14 @@ document.addEventListener("click", (e) => {
     return;
   }
   const item = e.target.closest(".copyable");
-  if (item && report && !window.getSelection()?.toString()) {
+  if (item && report && e.detail < 2 && !window.getSelection()?.toString()) {   // 2nd click of a double-click is not a copy
     const name = ITEM[item.dataset.src]?.(Number(item.dataset.i));
-    if (typeof name === "string") copyText(name, item);
+    if (typeof name !== "string") return;
+    // in the Extract table a double-click downloads: wait out the double-click window so the
+    // first click of a double-click does not also overwrite the clipboard
+    clearTimeout(pendingCopy);
+    if (item.closest("#extract-table")) pendingCopy = setTimeout(() => copyText(name, item), 320);
+    else copyText(name, item);
   }
 });
 

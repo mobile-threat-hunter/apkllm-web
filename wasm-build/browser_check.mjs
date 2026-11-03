@@ -156,6 +156,81 @@ try {
       if (xs.uncaused) fail(`${xs.uncaused} failed rows without a failure cause`);
     }
   }
+  // double-click an Extract row → that entry through its own reader → a download whose bytes
+  // equal extractEntry's; a reader-rejected row reports its reason and downloads nothing; the
+  // gate "bytes" button resolves names by index (a CR name survives).
+  if (gateOpened) {
+    const dc = JSON.parse(await evalJs(`(async()=>{
+      document.querySelector('[data-tab="extract"]').click();
+      $("#extract-filter").value = ""; xReaderOn = new Set(READER_ORDER); renderExtract();
+      const plan = report.gate.extract.entries, saved = [];
+      const orig = window.saveBlob; window.saveBlob = (b, n) => saved.push({ b, n });
+      window.__alerts = []; window.alert = (m) => window.__alerts.push(String(m));   // a modal would hang CDP
+      const settle = async () => { for (let t = 0; t < 100 && extracting.size; t++) await new Promise(r => setTimeout(r, 50)); await new Promise(r => setTimeout(r, 30)); };
+      const dbl = async (i) => { const tr = document.querySelector('#extract-table tbody tr[data-i="' + i + '"]');
+        tr.querySelector("td.name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); await new Promise(r => setTimeout(r, 10)); await settle(); };
+      const same = (a, b) => a.length === b.length && a.every((x, k) => x === b[k]);
+      const out = {};
+      const okI = plan.findIndex(e => e.deliverable && !e.name.endsWith("/") && !/[\\u0080-\\uffff]/.test(e.name) ? true : false);
+      if (okI >= 0) {
+        const n = saved.length; await dbl(okI);
+        const want = await wcall({ type: "extract", name: plan[okI].name });
+        out.ok = saved.length === n + 1 && want.ok && same(new Uint8Array(await saved[saved.length - 1].b.arrayBuffer()), want.data);
+        out.okName = saved[saved.length - 1]?.n;
+      }
+      const badI = plan.findIndex(e => !e.deliverable);
+      if (badI >= 0) { const n = saved.length; await dbl(badI); out.rejectedNoDownload = saved.length === n; out.rejectedStatus = $("#x-status").textContent; }
+      const crI = report.gate.entries.findIndex(e => e.name.includes("\\r"));
+      if (crI >= 0) {
+        document.querySelector('[data-tab="gate"]').click();
+        $("#gate-filter").value = ""; gateClassOn = new Set(CLASS_ORDER); renderGate();
+        const b = document.querySelector('#gate-table button[data-i="' + crI + '"]'); const n = saved.length;
+        b.click(); await new Promise(r => setTimeout(r, 10)); await settle();
+        out.crBytes = saved.length === n + 1;
+        document.querySelector('[data-tab="extract"]').click();
+      }
+      // a result that lands after another APK was loaded is dropped (no stale download / status)
+      if (okI >= 0) { const n = saved.length; const tr = document.querySelector('#extract-table tbody tr[data-i="' + okI + '"]');
+        tr.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); loadGen++; await settle(); loadGen--;
+        out.staleDropped = saved.length === n; }
+      out.found = { okI, badI, crI }; out.alerts = window.__alerts;
+      window.__saved = saved;   // the real-mouse test below keeps counting
+      return JSON.stringify(out);
+    })()`));
+    // REAL mouse double-clicks (CDP input, two clicks with detail 1 then 2): on a name → one
+    // download and no clipboard write; on a "bytes" button → exactly one download
+    const realDbl = async (selector) => {
+      const r = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const b = el.getBoundingClientRect(); return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
+      for (const clickCount of [1, 2]) for (const type of ["mousePressed", "mouseReleased"])
+        await S("Input.dispatchMouseEvent", { type, x: r.x, y: r.y, button: "left", clickCount });
+      await evalJs(`(async()=>{ await new Promise(r => setTimeout(r, 450)); for (let t = 0; t < 100 && extracting.size; t++) await new Promise(r => setTimeout(r, 50)); return true; })()`);
+    };
+    if (dc.found?.okI >= 0) {
+      await evalJs(`window.__copied = []; Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t) => { window.__copied.push(t); } } }); window.__n0 = window.__saved.length; true`);
+      await realDbl(`#extract-table tbody tr[data-i="${dc.found.okI}"] .copyable`);
+      const a = JSON.parse(await evalJs(`JSON.stringify({ dl: window.__saved.length - window.__n0, copied: window.__copied.length })`));
+      dc.realName = a; if (a.dl !== 1 || a.copied !== 0) fail("real double-click on a name: " + JSON.stringify(a));
+      await evalJs(`window.__n0 = window.__saved.length; true`);
+      await realDbl(`#extract-table tbody tr[data-i="${dc.found.okI}"] button[data-i]`);
+      const b = JSON.parse(await evalJs(`JSON.stringify({ dl: window.__saved.length - window.__n0 })`));
+      dc.realBytes = b; if (b.dl !== 1) fail("real double-click on bytes downloaded " + b.dl + " times");
+      // a real SINGLE click on an Extract name still copies it (after the double-click window)
+      const r1 = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector('#extract-table tbody tr[data-i="${dc.found.okI}"] .copyable'); const b = el.getBoundingClientRect(); window.__copied = []; window.__n0 = window.__saved.length; return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
+      for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, x: r1.x, y: r1.y, button: "left", clickCount: 1 });
+      const c = JSON.parse(await evalJs(`(async()=>{ await new Promise(r => setTimeout(r, 500)); return JSON.stringify({ copied: window.__copied, dl: window.__saved.length - window.__n0, want: report.gate.extract.entries[${dc.found.okI}].name }); })()`));
+      dc.realClick = { copied: c.copied.length, dl: c.dl };
+      if (c.copied.length !== 1 || c.copied[0] !== c.want || c.dl !== 0) fail("real single click on an Extract name: " + JSON.stringify(c));
+    }
+    await evalJs(`window.saveBlob = (b, n) => {}; true`);
+    console.log("dblclick:", JSON.stringify(dc).slice(0, 300));
+    if (dc.ok === false) fail("double-click download ≠ extractEntry bytes");
+    if (dc.rejectedNoDownload === false) fail("a reader-rejected row downloaded something");
+    if (dc.rejectedStatus !== undefined && !/strict reader rejects/.test(dc.rejectedStatus)) fail("rejected row did not report its reader's reason: " + dc.rejectedStatus);
+    if (dc.crBytes === false) fail("gate bytes button lost a CR-named entry");
+    if (dc.staleDropped === false) fail("an extract that finished after a new load still downloaded");
+    if (dc.alerts?.length) fail("unexpected alert: " + dc.alerts.join(" | "));
+    if (base === "readers" && (dc.found.okI < 0 || dc.found.badI < 0 || dc.found.crI < 0)) fail("readers.apk lost its dblclick fixtures " + JSON.stringify(dc.found));
+  }
   // copy (dexllm-web "⧉ copy"): every card button yields "# apkllm-web …" text; entry tables
   // are one TSV row per entry with a uniform column count whatever the names contain; hostile
   // names come out escaped; clicking a name copies the REPORT's name byte-exact.
