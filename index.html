@@ -22,155 +22,273 @@ window.__APKLLM_BUILD = "644c9e7-3";
 </script>
 <style>
   :root {
+    /* dexllm-web's palette: pure black foundation, blue-undertoned layered chrome,
+       rgba hairlines instead of solid borders. */
     --bg:#000; --bg-1:#04050a; --bg-2:#08090f; --bg-3:#0d0f16; --bg-4:#13161f;
     --line-1:rgba(255,255,255,0.05); --line-2:rgba(255,255,255,0.09); --line-3:rgba(255,255,255,0.14);
     --fg:#e6e9f0; --fg-2:#b6bbc7; --fg-3:#6f7480;
-    --brand:#6ba1ff; --brand-soft:rgba(107,161,255,0.10); --hl:rgba(107,161,255,0.14);
+    --brand:#6ba1ff; --brand-2:#4b88f0; --brand-3:#3672e5;
+    --brand-soft:rgba(107,161,255,0.10); --brand-glow:rgba(107,161,255,0.34);
+    --hl:rgba(107,161,255,0.14); --hl-strong:rgba(107,161,255,0.26);
     --good:#5fdca0; --warn:#f5b441; --bad:#ff5e5e; --info:#67c5e6;
     --e-out:cubic-bezier(0.16,1,0.3,1);
-    --f-ui:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    --f-ui:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI Variable Display", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
     --f-mono:"JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   }
   * { box-sizing:border-box; }
   html,body { height:100%; margin:0; }
   body {
     background:var(--bg); color:var(--fg); font:13px/1.55 var(--f-mono);
-    -webkit-font-smoothing:antialiased; display:flex; flex-direction:column;
-    background-image:radial-gradient(1200px 600px at 75% -10%, rgba(107,161,255,0.045), transparent 60%);
+    font-feature-settings:"ss01","calt","liga"; text-rendering:optimizeLegibility;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    display:flex; flex-direction:column;
+    background-image:
+      radial-gradient(1200px 600px at 75% -10%, rgba(107,161,255,0.045), transparent 60%),
+      radial-gradient(900px 600px at 0% 100%, rgba(107,161,255,0.025), transparent 60%);
     background-attachment:fixed;
   }
   * { scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.10) transparent; }
+  *::-webkit-scrollbar { width:9px; height:9px; }
+  *::-webkit-scrollbar-track { background:transparent; }
+  *::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.08); border-radius:999px; border:2px solid transparent; background-clip:padding-box; }
+  *::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.18); background-clip:padding-box; }
+  *::-webkit-scrollbar-corner { background:transparent; }
   ::selection { background:rgba(107,161,255,0.30); color:#fff; }
   a { color:var(--brand); }
+  code { font-family:var(--f-mono); color:var(--fg-2); }
+
+  /* ── header (dexllm-web) ─────────────────────────────────────────── */
   header {
-    display:flex; align-items:center; gap:14px; padding:10px 18px;
-    border-bottom:1px solid var(--line-2); background:var(--bg-1); font-family:var(--f-ui);
+    position:relative; z-index:3; padding:12px 22px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+    background:linear-gradient(180deg, rgba(13,15,22,0.85) 0%, rgba(8,9,15,0.85) 100%);
+    backdrop-filter:blur(14px) saturate(140%); -webkit-backdrop-filter:blur(14px) saturate(140%);
+    box-shadow:inset 0 -1px 0 var(--line-1), inset 0 1px 0 rgba(255,255,255,0.03), 0 1px 0 rgba(0,0,0,0.8);
+  }
+  header::after {
+    content:""; position:absolute; left:0; right:0; bottom:-1px; height:1px; pointer-events:none; opacity:0.55;
+    background:linear-gradient(90deg, transparent, rgba(107,161,255,0.18) 18%, rgba(107,161,255,0.22) 50%, rgba(107,161,255,0.18) 82%, transparent);
   }
   header h1 { font-size:15px; margin:0; font-weight:600; }
   header h1 span { color:var(--brand); }
-  header .sub { color:var(--fg-3); font-size:12px; }
-  #status { margin-left:auto; color:var(--fg-3); font-size:12px; }
+  .ver {
+    font:500 11px/1 var(--f-ui); color:var(--fg-3); text-decoration:none; padding:4px 10px; border-radius:999px; white-space:nowrap;
+    background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%);
+    box-shadow:inset 0 0 0 1px var(--line-2); letter-spacing:0.02em;
+    transition:color 200ms var(--e-out), box-shadow 200ms var(--e-out), background 200ms var(--e-out);
+  }
+  .ver:hover { color:var(--brand); background:linear-gradient(180deg, var(--bg-3) 0%, rgba(107,161,255,0.06) 100%); box-shadow:inset 0 0 0 1px rgba(107,161,255,0.40), 0 0 0 3px rgba(107,161,255,0.10); }
+  .ver code { font:inherit; color:var(--fg); font-family:var(--f-mono); }
+  .sub { color:var(--fg-3); font:500 11px/1.4 var(--f-ui); letter-spacing:0.02em; }
+  #status { margin-left:auto; font:12px var(--f-ui); color:var(--fg-3); letter-spacing:0.01em; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   #status b { color:var(--fg); font-weight:600; }
+
+  /* ── pills ───────────────────────────────────────────────────────── */
   .pill {
     display:inline-block; padding:2.5px 9px; border-radius:999px; font:600 10.5px/1.4 var(--f-ui);
-    letter-spacing:0.025em; vertical-align:middle; box-shadow:inset 0 0 0 1px var(--line-3); color:var(--fg-2);
+    letter-spacing:0.025em; vertical-align:middle; white-space:nowrap; color:var(--fg-2);
+    background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); box-shadow:inset 0 0 0 1px var(--line-3);
   }
-  .pill.ok   { background:rgba(95,220,160,0.10); color:var(--good); box-shadow:inset 0 0 0 1px rgba(95,220,160,0.30); }
-  .pill.bad  { background:rgba(255,94,94,0.10);  color:var(--bad);  box-shadow:inset 0 0 0 1px rgba(255,94,94,0.34); }
-  .pill.warn { background:rgba(245,180,65,0.10); color:var(--warn); box-shadow:inset 0 0 0 1px rgba(245,180,65,0.34); }
-  .pill.info { background:rgba(103,197,230,0.10); color:var(--info); box-shadow:inset 0 0 0 1px rgba(103,197,230,0.34); }
-  .pill.na   { color:var(--fg-3); }
+  .pill.ok   { background:linear-gradient(180deg, rgba(95,220,160,0.16), rgba(95,220,160,0.06));  color:var(--good); box-shadow:inset 0 0 0 1px rgba(95,220,160,0.30); }
+  .pill.bad  { background:linear-gradient(180deg, rgba(255,94,94,0.16), rgba(255,94,94,0.06));   color:var(--bad);  box-shadow:inset 0 0 0 1px rgba(255,94,94,0.34); }
+  .pill.warn { background:linear-gradient(180deg, rgba(245,180,65,0.16), rgba(245,180,65,0.06)); color:var(--warn); box-shadow:inset 0 0 0 1px rgba(245,180,65,0.34); }
+  .pill.info { background:linear-gradient(180deg, rgba(103,197,230,0.16), rgba(103,197,230,0.06)); color:var(--info); box-shadow:inset 0 0 0 1px rgba(103,197,230,0.34); }
+  .pill.na   { color:var(--fg-3); background:transparent; box-shadow:inset 0 0 0 1px var(--line-2); }
+
   main { flex:1; display:flex; flex-direction:column; min-height:0; }
-  /* drop card */
+
+  /* ── drop screen (dexllm-web) ────────────────────────────────────── */
   /* overflow:auto + the card's margin:auto: on a short viewport the card scrolls instead of
      running under the footer, and is never clipped at the top */
   #drop { display:flex; align-items:center; justify-content:center; flex:1; min-height:0; overflow:auto; padding:24px; cursor:pointer; }
   #drop input { display:none; }
-  /* the drop card — dashed box holding the logo + instructions (dexllm-web layout) */
   #dropcard {
     display:flex; flex-direction:column; align-items:center; gap:10px; margin:auto;
-    width:max-content; max-width:90vw; padding:18px; text-align:center; border:1px dashed var(--line-3);
-    border-radius:14px; color:var(--fg-2); font-family:var(--f-ui);
-    transition:border-color 160ms var(--e-out), background 160ms var(--e-out);
+    width:max-content; max-width:90vw; padding:18px; text-align:center; border:2px dashed var(--line-2);
+    border-radius:14px; color:var(--fg-3); font-family:var(--f-ui);
+    transition:border-color 200ms var(--e-out), background 200ms var(--e-out), box-shadow 200ms var(--e-out);
   }
+  #drop:hover #dropcard { border-color:rgba(107,161,255,0.30); }
+  #drop.drag #dropcard { border-color:var(--brand); background:var(--hl); color:var(--fg); box-shadow:0 0 0 4px rgba(107,161,255,0.08); }
   #droplogo {
     /* shrinks with a short viewport so the instructions stay visible */
     width:min(300px, 72vw, max(120px, calc(100vh - 300px))); aspect-ratio:1/1; border-radius:10px;
     display:block; object-fit:cover; background:#000; pointer-events:none;
   }
   @media (max-width:720px) { #droplogo { width:min(220px, 72vw, max(120px, calc(100vh - 300px))); } }
-  #drop.drag #dropcard { border-color:var(--brand); background:var(--hl); color:var(--fg); }
-  #dropcard .big { font-size:17px; color:var(--fg); font-weight:600; }
-  #dropcard .drophint { font-size:12px; color:var(--fg-3); }
+  #dropcard .big { font-size:16px; color:var(--fg); font-weight:600; }
+  #dropcard .big b { color:var(--brand); }
+  #dropcard .drophint { font-size:12px; }
   #dropcard #droploading { display:none; font-size:13px; color:var(--fg); }
   #drop.loading #droploading { display:block; }
   #drop.loading .big, #drop.loading .drophint { display:none; }
   #drop.hidden { display:none; }
   .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--line-3); border-top-color:var(--brand); border-radius:50%; animation:spin 0.8s linear infinite; margin-right:8px; vertical-align:-2px; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  /* app */
+
+  /* ── app chrome ──────────────────────────────────────────────────── */
   #app { display:none; flex:1; flex-direction:column; min-height:0; }
   #app.on { display:flex; }
   #filebar {
-    display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 18px;
-    border-bottom:1px solid var(--line-1); background:var(--bg-1); font-size:12px; color:var(--fg-2);
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 22px;
+    background:linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); box-shadow:inset 0 -1px 0 var(--line-1);
+    font:12px var(--f-ui); color:var(--fg-2);
   }
-  #filebar .name { color:var(--fg); font-weight:600; }
+  #filebar .name { color:var(--fg); font:600 12.5px var(--f-mono); }
+  #filebar #fsize { color:var(--fg-3); }
   #filebar button { margin-left:auto; }
-  button, select, input[type=number], input[type=search] {
-    font:12px var(--f-ui); color:var(--fg); background:var(--bg-3); border:1px solid var(--line-2);
-    border-radius:7px; padding:4px 9px;
+  /* tabs — dexllm-web's Chrome-style dex tabs: the active one merges into the panel */
+  #tabs {
+    display:flex; align-items:flex-end; gap:0; padding:8px 16px 0; overflow-x:auto; overflow-y:hidden; flex:none;
+    background:linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); box-shadow:inset 0 -1px 0 var(--line-1);
+  }
+  #tabs .tab {
+    flex:none; padding:8px 15px 9px; border-radius:9px 9px 0 0; position:relative; bottom:-1px; cursor:pointer; white-space:nowrap;
+    background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); color:var(--fg-3);
+    font:600 12px/1.3 var(--f-ui); letter-spacing:0.01em; user-select:none;
+    box-shadow:inset 0 0 0 1px var(--line-2), inset 0 1px 0 rgba(255,255,255,0.03);
+    transition:background 220ms var(--e-out), color 220ms var(--e-out);
+  }
+  #tabs .tab + .tab { margin-left:-1px; }
+  #tabs .tab:hover { background:linear-gradient(180deg, var(--bg-4) 0%, var(--bg-3) 100%); color:var(--fg); z-index:1; }
+  #tabs .tab.on {
+    background:var(--bg); color:var(--fg); font-weight:700; z-index:2;
+    box-shadow:inset 0 0 0 1px var(--line-2), inset 0 2px 0 var(--brand), 0 -8px 24px rgba(107,161,255,0.10), 0 1px 0 var(--bg);
+  }
+  #tabs .tab .n {
+    display:inline-block; margin-left:8px; padding:1.5px 7px; border-radius:999px; font:600 10px/1.4 var(--f-ui);
+    background:rgba(255,255,255,0.05); color:var(--fg-3); letter-spacing:0.025em; box-shadow:inset 0 0 0 1px var(--line-1);
+  }
+  #tabs .tab .n:empty { display:none; }
+  #tabs .tab.on .n { background:var(--brand-soft); color:var(--brand); box-shadow:inset 0 0 0 1px rgba(107,161,255,0.30); }
+  #tabs .tab .n.alert { background:rgba(255,94,94,0.10); color:#ff9c8c; box-shadow:inset 0 0 0 1px rgba(255,94,94,0.30); }
+  #tabs .tab .n.warn  { background:rgba(245,180,65,0.10); color:var(--warn); box-shadow:inset 0 0 0 1px rgba(245,180,65,0.30); }
+
+  /* ── controls ────────────────────────────────────────────────────── */
+  button, select {
+    font:600 12px/1.3 var(--f-ui); letter-spacing:0.015em; color:var(--fg-2); border:0; border-radius:8px; padding:6px 12px;
+    background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow:inset 0 0 0 1px var(--line-2);
+    transition:color 200ms var(--e-out), background 200ms var(--e-out), box-shadow 200ms var(--e-out);
   }
   button { cursor:pointer; }
-  button:hover { background:var(--bg-4); border-color:var(--line-3); }
-  button:disabled { opacity:0.5; cursor:default; }
-  #tabs { display:flex; gap:2px; padding:0 18px; border-bottom:1px solid var(--line-2); background:var(--bg-1); font-family:var(--f-ui); }
-  #tabs .tab { padding:9px 14px; color:var(--fg-3); cursor:pointer; border-bottom:2px solid transparent; font-size:12.5px; font-weight:600; }
-  #tabs .tab:hover { color:var(--fg-2); }
-  #tabs .tab.on { color:var(--fg); border-bottom-color:var(--brand); }
-  #tabs .tab .pill { margin-left:6px; }
-  .panel { display:none; flex:1; overflow:auto; padding:14px 18px 40px; min-height:0; }
+  button:hover:not(:disabled), select:hover {
+    color:var(--brand); background:linear-gradient(180deg, var(--bg-3) 0%, rgba(107,161,255,0.06) 100%);
+    box-shadow:inset 0 0 0 1px rgba(107,161,255,0.42), 0 0 0 3px rgba(107,161,255,0.10);
+  }
+  button:active:not(:disabled) { transform:translateY(0.5px); }
+  button:disabled { opacity:0.4; cursor:default; }
+  button.primary {
+    color:#fff; text-shadow:0 1px 0 rgba(0,20,60,0.4);
+    background:linear-gradient(180deg, var(--brand) 0%, var(--brand-3) 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,0.22), inset 0 -1px 0 rgba(0,0,0,0.25), 0 1px 0 rgba(0,0,0,0.4), 0 4px 12px rgba(107,161,255,0.30), 0 0 0 1px rgba(107,161,255,0.45);
+  }
+  button.primary:hover:not(:disabled) {
+    color:#fff; background:linear-gradient(180deg, #7dadff 0%, var(--brand-2) 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,0.26), 0 1px 0 rgba(0,0,0,0.4), 0 6px 18px rgba(107,161,255,0.42), 0 0 0 1px rgba(107,161,255,0.6);
+  }
+  td button { padding:3px 10px; font-size:10.5px; border-radius:6px; }
+  input[type=search], input[type=number] {
+    font:12.5px/1.4 var(--f-mono); color:var(--fg); background:var(--bg-1); border:0; border-radius:9px; padding:7px 11px;
+    box-shadow:inset 0 0 0 1px var(--line-2); transition:box-shadow 200ms var(--e-out), background 200ms var(--e-out);
+  }
+  input::placeholder { color:var(--fg-3); }
+  input[type=search]:focus, input[type=number]:focus, select:focus {
+    outline:none; background:var(--bg); box-shadow:inset 0 0 0 1px rgba(107,161,255,0.55), 0 0 0 3px rgba(107,161,255,0.12);
+  }
+  input[type=checkbox] { accent-color:var(--brand); cursor:pointer; }
+
+  /* ── panels & cards (dexllm-web side panels: gradient body, banded header) ── */
+  .panel { display:none; flex:1; overflow:auto; padding:16px 22px 40px; min-height:0; }
   .panel.on { display:block; }
-  .card { background:var(--bg-2); border:1px solid var(--line-1); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
-  .card h2 { font:600 12.5px var(--f-ui); color:var(--fg-2); margin:0 0 8px; letter-spacing:0.02em; text-transform:uppercase; }
-  .card p.note { color:var(--fg-3); font-size:11.5px; margin:6px 0 0; font-family:var(--f-ui); }
-  .kv { display:grid; grid-template-columns:max-content 1fr; gap:3px 16px; font-size:12px; }
-  .kv dt { color:var(--fg-3); }
-  .kv dd { margin:0; color:var(--fg); word-break:break-all; }
+  .card {
+    background:linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius:12px; padding:0 16px 14px; margin-bottom:14px;
+    box-shadow:inset 0 0 0 1px var(--line-1), inset 0 1px 0 rgba(255,255,255,0.02), 0 8px 24px rgba(0,0,0,0.35);
+  }
+  /* no overflow:hidden on .card (it would clip wide content on narrow screens) — the band
+     rounds its own top corners instead */
+  .card > h2 {
+    margin:0 -16px 12px; padding:11px 16px; border-radius:12px 12px 0 0; font:600 11.5px/1.4 var(--f-ui); color:var(--fg); letter-spacing:0.04em; text-transform:uppercase;
+    background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow:inset 0 -1px 0 var(--line-1);
+  }
+  .card > h2 .tiny { text-transform:none; letter-spacing:0.01em; margin-left:6px; font-weight:500; }
+  .card p.note { color:var(--fg-3); font:11.5px/1.55 var(--f-ui); margin:10px 0 0; }
+  .card p.note b { color:var(--fg-2); }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:5px 18px; font-size:12px; }
+  .kv dt { color:var(--fg-3); font:500 11.5px/1.7 var(--f-ui); }
+  .kv dd { margin:0; color:var(--fg); word-break:break-all; line-height:1.7; }
   .checks { list-style:none; margin:0; padding:0; }
-  .checks li { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:6px 0; border-top:1px solid var(--line-1); font-size:12px; }
-  .checks li:first-child { border-top:0; }
-  .checks .id { color:var(--fg-2); font-weight:600; }
-  .checks .sev { color:var(--fg-3); font-size:11px; margin-left:6px; font-family:var(--f-ui); }
-  .checks .reason { color:var(--fg-2); }
-  .checks .detail { color:var(--fg-3); font-size:11px; margin-top:2px; word-break:break-all; }
-  .form { display:flex; flex-wrap:wrap; gap:14px; align-items:end; }
-  .form label { display:flex; flex-direction:column; gap:4px; font:11.5px var(--f-ui); color:var(--fg-3); }
-  .form input[type=number] { width:90px; }
-  .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
-  .toolbar input[type=search] { width:260px; }
-  .toolbar .count { color:var(--fg-3); font-size:11.5px; font-family:var(--f-ui); }
-  .chip { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--line-2); color:var(--fg-2); font:11px var(--f-ui); cursor:pointer; user-select:none; }
-  .chip.on { border-color:var(--brand); color:var(--brand); background:var(--brand-soft); }
-  .chip .n { color:var(--fg-3); margin-left:4px; }
+  .checks li { display:grid; grid-template-columns:96px 1fr; gap:12px; padding:9px 0; border-top:1px solid var(--line-1); font-size:12px; }
+  .checks li:first-child { border-top:0; padding-top:2px; }
+  .checks .id { color:var(--fg); font-weight:600; }
+  .checks .sev { color:var(--fg-3); font:500 10.5px var(--f-ui); margin-left:8px; padding:1px 7px; border-radius:999px; box-shadow:inset 0 0 0 1px var(--line-2); }
+  .checks li > * { min-width:0; }
+  .checks .reason { color:var(--fg-2); margin-top:2px; overflow-wrap:anywhere; }
+  .checks .detail { color:var(--fg-3); font-size:11px; margin-top:4px; word-break:break-all; padding:6px 8px; background:var(--bg-1); border-radius:6px; box-shadow:inset 0 0 0 1px var(--line-1); max-height:140px; overflow:auto; }
+  .form { display:flex; flex-wrap:wrap; gap:16px; align-items:end; }
+  .form label { display:flex; flex-direction:column; gap:5px; font:600 10.5px var(--f-ui); color:var(--fg-3); letter-spacing:0.04em; text-transform:uppercase; }
+  .form input[type=number] { width:110px; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  .toolbar input[type=search] { width:280px; }
+  .toolbar .count { color:var(--fg-3); font:11.5px var(--f-ui); }
+  .chip {
+    display:inline-block; padding:3px 10px; border-radius:999px; color:var(--fg-3); font:600 11px var(--f-ui); cursor:pointer; user-select:none;
+    background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow:inset 0 0 0 1px var(--line-2);
+    transition:color 200ms var(--e-out), box-shadow 200ms var(--e-out), background 200ms var(--e-out);
+  }
+  .chip:hover { color:var(--fg); }
+  .chip.on { color:var(--brand); background:var(--brand-soft); box-shadow:inset 0 0 0 1px rgba(107,161,255,0.40); }
+  .chip .n { color:var(--fg-3); margin-left:5px; font-weight:500; }
+  .chip.on .n { color:rgba(107,161,255,0.75); }
+
+  /* ── tables ──────────────────────────────────────────────────────── */
+  .tablewrap { overflow:auto; border-radius:9px; box-shadow:inset 0 0 0 1px var(--line-1); }
   table { border-collapse:collapse; width:100%; font-size:11.5px; }
-  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line-1); vertical-align:top; white-space:nowrap; }
-  th { position:sticky; top:0; background:var(--bg-2); color:var(--fg-3); font:600 11px var(--f-ui); z-index:1; }
+  th, td { text-align:left; padding:5px 9px; border-bottom:1px solid var(--line-1); vertical-align:top; white-space:nowrap; }
+  th {
+    position:sticky; top:0; z-index:1; color:var(--fg-3); font:600 10.5px var(--f-ui); letter-spacing:0.04em; text-transform:uppercase;
+    background:linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow:inset 0 -1px 0 var(--line-2);
+  }
+  /* hover tints only unflagged rows — a fail/cond/flag/sel highlight never drops under the pointer */
+  tbody tr:not(.fail):not(.cond):not(.flag):not(.sel):hover td { background:rgba(255,255,255,0.025); }
   td.name { white-space:normal; word-break:break-all; max-width:420px; color:var(--fg); }
   #extract-table td.name { min-width:220px; }
   td.wrap { white-space:normal; max-width:520px; color:var(--fg-2); }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   th.num { text-align:right; }
-  tr.fail td { background:rgba(255,94,94,0.05); }
-  tr.cond td { background:rgba(245,180,65,0.05); }
-  tr.flag td { background:rgba(245,180,65,0.05); }
+  tr.fail td { background:rgba(255,94,94,0.055); }
+  tr.fail td:first-child { box-shadow:inset 2px 0 0 rgba(255,94,94,0.7); }
+  tr.cond td, tr.flag td { background:rgba(245,180,65,0.05); }
+  tr.cond td:first-child, tr.flag td:first-child { box-shadow:inset 2px 0 0 rgba(245,180,65,0.6); }
   tr.sel td { background:var(--hl); }
+  tr.sel td:first-child { box-shadow:inset 2px 0 0 var(--brand); }
+  #content-table tbody tr { cursor:pointer; }
   td.diff { color:var(--bad); font-weight:600; }
   td.dim { color:var(--fg-3); }
   .tiny { font:11px var(--f-ui); color:var(--fg-3); }
-  pre.hex { margin:8px 0 0; padding:10px; background:var(--bg-1); border:1px solid var(--line-1); border-radius:8px; font-size:11px; line-height:1.5; overflow:auto; color:var(--fg-2); }
+  pre.hex { margin:10px 0 0; padding:12px; background:var(--bg-1); border-radius:9px; box-shadow:inset 0 0 0 1px var(--line-1); font-size:11px; line-height:1.55; overflow:auto; color:var(--fg-2); }
   .sev-tamper { color:var(--bad); } .sev-suspicious { color:var(--warn); } .sev-info { color:var(--info); }
-  .finding { padding:6px 0; border-top:1px solid var(--line-1); font-size:12px; }
-  .finding:first-child { border-top:0; }
-  .finding .fid { font-weight:600; }
+  .finding { padding:9px 0; border-top:1px solid var(--line-1); font-size:12px; }
+  .finding:first-child { border-top:0; padding-top:2px; }
+  .finding .fid { font-weight:600; margin-right:8px; }
   .finding .fentry { color:var(--fg-3); margin-left:8px; }
-  .finding .fdetail { color:var(--fg-2); margin-top:2px; white-space:normal; }
+  .finding .fdetail { color:var(--fg-2); margin-top:3px; white-space:normal; }
   .err { color:var(--bad); }
-  footer { padding:8px 18px; border-top:1px solid var(--line-1); color:var(--fg-3); font:11px var(--f-ui); }
-  @media (max-width:720px) { .checks li { grid-template-columns:1fr; } .toolbar input[type=search] { width:100%; } }
+  footer { padding:9px 22px; color:var(--fg-3); font:11px var(--f-ui); background:linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); box-shadow:inset 0 1px 0 var(--line-1); }
+  footer code { color:var(--fg-2); }
+  @media (max-width:720px) { .checks li { grid-template-columns:1fr; } .toolbar input[type=search] { width:100%; } header { padding:10px 14px; } .panel { padding:12px 12px 32px; } }
 </style>
 </head>
 <body>
 <header>
-  <h1><span>apkllm</span> · APK container</h1>
-  <span class="sub">real AOSP libziparchive in your browser — install gate · extract · content · tamper scan · signing block</span>
+  <h1>apk<span>llm</span></h1>
+  <a class="ver" id="ver" href="https://github.com/mobile-threat-hunter/apkllm-web/releases" target="_blank" rel="noopener" title="engine build pin: the apkllm revision the WASM was built from">engine · <code></code></a>
+  <span class="sub">in-browser APK container analyzer · real AOSP libziparchive · runs entirely on your device (WASM)</span>
   <span id="status">loading engine…</span>
 </header>
 <main>
 <label id="drop" for="file">
   <div id="dropcard">
     <img id="droplogo" src="apkllm_logo.png" alt="APKLLM">
-    <div class="big">Drop an APK here</div>
+    <div class="big">Drop an <b>.apk</b> here</div>
     <div class="drophint">or click to choose — nothing is uploaded, the container is read locally by the device's own ZIP reader</div>
     <div id="droploading"><span class="spin"></span>reading container…</div>
   </div>
@@ -185,11 +303,11 @@ window.__APKLLM_BUILD = "644c9e7-3";
     <button id="another">load another</button>
   </div>
   <div id="tabs">
-    <div class="tab on" data-tab="gate">Install gate</div>
-    <div class="tab" data-tab="extract">Extract</div>
-    <div class="tab" data-tab="content">Content</div>
-    <div class="tab" data-tab="tamper">Tamper scan</div>
-    <div class="tab" data-tab="signing">Signing block</div>
+    <div class="tab on" data-tab="gate">Install gate<span class="n" id="n-gate"></span></div>
+    <div class="tab" data-tab="extract">Extract<span class="n" id="n-extract"></span></div>
+    <div class="tab" data-tab="content">Content<span class="n" id="n-content"></span></div>
+    <div class="tab" data-tab="tamper">Tamper scan<span class="n" id="n-tamper"></span></div>
+    <div class="tab" data-tab="signing">Signing block<span class="n" id="n-signing"></span></div>
   </div>
 
   <!-- ── Install gate ─────────────────────────────────────────────── -->
@@ -227,7 +345,7 @@ window.__APKLLM_BUILD = "644c9e7-3";
         <span id="gate-chips"></span>
         <span class="count" id="gate-count"></span>
       </div>
-      <div style="overflow:auto"><table id="gate-table"></table></div>
+      <div class="tablewrap"><table id="gate-table"></table></div>
     </div>
   </section>
 
@@ -252,12 +370,12 @@ window.__APKLLM_BUILD = "644c9e7-3";
       <div class="toolbar">
         <button id="x-sel-shown">select shown</button>
         <button id="x-sel-none">clear selection</button>
-        <button id="x-bundle" disabled>extract selected (.zip)</button>
-        <button id="x-all">extract all (.zip)</button>
+        <button id="x-bundle" class="primary" disabled>extract selected (.zip)</button>
+        <button id="x-all" class="primary">extract all (.zip)</button>
         <button id="x-cancel" style="display:none">cancel</button>
         <span class="count" id="x-status"></span>
       </div>
-      <div style="overflow:auto"><table id="extract-table"></table></div>
+      <div class="tablewrap"><table id="extract-table"></table></div>
     </div>
   </section>
 
@@ -278,7 +396,7 @@ window.__APKLLM_BUILD = "644c9e7-3";
         <span id="content-chips"></span>
         <span class="count" id="content-count"></span>
       </div>
-      <div style="overflow:auto"><table id="content-table"></table></div>
+      <div class="tablewrap"><table id="content-table"></table></div>
       <div id="content-hex"></div>
     </div>
   </section>
@@ -303,7 +421,7 @@ window.__APKLLM_BUILD = "644c9e7-3";
         <input type="search" id="tamper-filter" placeholder="filter by name…">
         <span class="count" id="tamper-count"></span>
       </div>
-      <div style="overflow:auto"><table id="tamper-table"></table></div>
+      <div class="tablewrap"><table id="tamper-table"></table></div>
     </div>
   </section>
 
@@ -328,6 +446,7 @@ const tri = (v) => v === true ? '<span class="pill ok">true</span>' : v === fals
 const okPill = (ok, yes = "ok", no = "fail", unk = "indeterminate") =>
   ok === true ? `<span class="pill ok">${yes}</span>` : ok === false ? `<span class="pill bad">${no}</span>` : `<span class="pill warn">${unk}</span>`;
 $("#buildpin").textContent = window.__APKLLM_BUILD;
+$("#ver code").textContent = window.__APKLLM_BUILD;
 const statusEl = $("#status");
 
 // ── worker ───────────────────────────────────────────────────────────────
@@ -451,6 +570,25 @@ function renderFilebar() {
   if (signing.ok) pills.push(signing.has_signing_block ? '<span class="pill info">APK Signing Block</span>' : '<span class="pill na">no signing block</span>');
   if (content.ok && content.summary.role_mismatch) pills.push(`<span class="pill bad">${content.summary.role_mismatch} role mismatch</span>`);
   $("#fpills").innerHTML = pills.join(" ");
+  // tab count badges (dexllm-web .dextab .n). The number is the entry count (tamper: finding
+  // count / "clean"; signing: scheme-block count / "none"); the colour follows the SAME verdict
+  // the tab shows — red = fails / refused, amber = conditional on an unknown manifest input.
+  const badge = (id, text, level) => {
+    const el = $(id); el.textContent = text;
+    el.classList.toggle("alert", level === "alert"); el.classList.toggle("warn", level === "warn");
+  };
+  if (gate.ok) {
+    const fatal = gate.installable === false || gate.entries.some(e => e.install_fatal);
+    badge("#n-gate", gate.entry_count, fatal ? "alert" : gate.installable === null ? "warn" : null);
+    const xs = gate.extract.summary;
+    badge("#n-extract", gate.entry_count, xs.undeliverable || xs.device_rejected ? "alert" : null);
+  } else { badge("#n-gate", "refused", "alert"); badge("#n-extract", "refused", "alert"); }
+  if (content.ok) badge("#n-content", content.entry_count, content.summary.role_mismatch ? "alert" : null);
+  else badge("#n-content", "refused", "alert");
+  if (tamper.ok) { const n = tamper.findings.filter(f => f.severity !== "info").length; badge("#n-tamper", n || "clean", n ? "alert" : null); }
+  else badge("#n-tamper", "failed", "alert");
+  if (signing.ok) badge("#n-signing", signing.has_signing_block ? signing.scheme_blocks.length : "none", null);
+  else badge("#n-signing", "not a ZIP", "alert");
 }
 
 // Install gate -------------------------------------------------------------
@@ -726,8 +864,8 @@ function renderSigning() {
     <dt>EOCD</dt><dd>${hex(s.eocd_offset)}</dd>
     <dt>central directory</dt><dd>@ ${hex(s.central_dir_offset)} · ${s.central_dir_size} bytes${s.zip64_locator_present ? ' · <span class="pill warn">zip64 locator present</span>' : ""}</dd>
     <dt>APK Signing Block</dt><dd>${s.has_signing_block ? `present @ ${hex(s.signing_block_offset)} · ${s.signing_block_size} bytes` : `absent — <span class="tiny">${esc(s.signing_block_error || "")}</span>`}</dd>
-  </dl>` + (s.has_signing_block ? `<table style="margin-top:10px"><thead><tr><th>id</th><th>scheme</th><th class="num">value offset</th><th class="num">value size</th></tr></thead><tbody>` +
-    s.scheme_blocks.map(b => `<tr><td>${hex(b.id, 8)}</td><td>${esc(SCHEME_NAMES[b.id] || "unknown block id")}</td><td class="num">${hex(b.value_offset)}</td><td class="num">${b.value_size}</td></tr>`).join("") + "</tbody></table>" : "") +
+  </dl>` + (s.has_signing_block ? `<div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>id</th><th>scheme</th><th class="num">value offset</th><th class="num">value size</th></tr></thead><tbody>` +
+    s.scheme_blocks.map(b => `<tr><td>${hex(b.id, 8)}</td><td>${esc(SCHEME_NAMES[b.id] || "unknown block id")}</td><td class="num">${hex(b.value_offset)}</td><td class="num">${b.value_size}</td></tr>`).join("") + "</tbody></table></div>" : "") +
     `<p class="note">A v1 (JAR) signature lives in META-INF/* entries — see the Install gate table (class <code>meta</code>). Whether any scheme actually verifies is apksig's call (apkllm.signing), not this page's.</p>`;
 }
 </script>

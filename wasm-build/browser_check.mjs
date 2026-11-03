@@ -85,6 +85,12 @@ try {
   if (gateOpened && (s.gateRows === 0 || s.gateChecks !== 4)) fail("gate panel empty");
   if (gateOpened && s.contentRows === 0) fail("content panel empty");
   if (s.tamperChecks !== 2 && !s.signing.includes("not a ZIP")) fail("tamper checks missing");
+  // tab badges follow the panel verdicts: a refused container is a red "refused", never blank
+  const badges = JSON.parse(await evalJs(`JSON.stringify(Object.fromEntries(["gate","extract","content","tamper","signing"].map(k => { const el = document.querySelector("#n-" + k); return [k, { t: el.textContent, alert: el.classList.contains("alert") }]; })))`));
+  console.log("badges:", JSON.stringify(badges));
+  for (const [k, b] of Object.entries(badges)) if (!b.t) fail(`tab badge ${k} is blank`);
+  if (!gateOpened && !(badges.gate.t === "refused" && badges.gate.alert)) fail("refused container not flagged on the Install gate badge");
+  if (gateOpened && badges.gate.t !== String(s.gateRows)) fail(`gate badge ${badges.gate.t} ≠ ${s.gateRows} entries`);
   // flip a manifest input and make sure the gate re-runs
   await evalJs(`(async()=>{const s=document.querySelector("#in-enl"); s.value="false"; s.dispatchEvent(new Event("change")); await new Promise(r=>setTimeout(r,800));})()`);
   const echoed = await evalJs(`document.querySelector("#gate-verdict").textContent`);
