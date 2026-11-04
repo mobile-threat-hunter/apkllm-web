@@ -340,6 +340,69 @@ try {
   if (cp.hostileNames && base === "readers" && !(cp.escapedTab && cp.escapedCr && cp.quoted && cp.formula)) fail("hostile names not escaped in the TSV: " + JSON.stringify(cp));
   if (base === "readers" && cp.hostileNames < 4) fail("readers.apk lost its hostile-name fixtures");
   for (const c of cp.clicks) if (!c.ok) fail("click-copy not byte-exact for " + JSON.stringify(c.want));
+  // checks / findings lists scroll inside their own box: every such list (selected by role, not
+  // by the class) must be a scrollbox with overflow-y auto, none may exceed its cap, the lists the
+  // report predicts must be shown, and a long findings list must really scroll
+  const want = JSON.parse(await evalJs(`JSON.stringify({ gate: !!(report.gate.ok && report.gate.checks?.length), extract: !!(report.gate.ok && report.gate.extract?.ok && report.gate.extract.checks?.length),
+    content: !!(report.content.ok && report.content.checks?.length), tamper: !!(report.tamper.ok && report.tamper.checks?.length),
+    tables: { gate: report.gate.ok, extract: !!(report.gate.ok && report.gate.extract?.ok), content: report.content.ok, tamper: report.tamper.ok },
+    findings: report.tamper.ok ? report.tamper.findings.length : 0 })`));
+  for (const tab of ["gate", "extract", "content", "tamper"]) {
+    await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
+    const boxes = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll("#panel-${tab} ul.checks, #panel-${tab} #tamper-findings, #panel-${tab} .tablewrap")].map(b => ({ id: b.id || b.querySelector("table")?.id, cls: b.classList.contains("scrollbox"), oy: getComputedStyle(b).overflowY, shown: !!b.offsetParent, h: b.clientHeight, sh: b.scrollHeight,
+      cap: b.classList.contains("scrolltable") ? Math.min(640, innerHeight * 0.65) : Math.min(420, innerHeight * 0.45) })))`));
+    if (!boxes.some(b => b.id === tab + "-checks")) fail(`no checks list on the ${tab} tab`);
+    for (const b of boxes) {
+      if (!b.cls || b.oy !== "auto") fail(`${b.id} is not a scrolling box (${b.cls ? "" : "no .scrollbox, "}overflow-y ${b.oy})`);
+      if (b.h > b.cap + 1) fail(`${b.id} is ${b.h}px tall, over its ${Math.round(b.cap)}px box`);
+    }
+    if (want[tab] && !boxes.some(b => b.shown && b.id.endsWith("checks"))) fail(`${tab} checks not shown although the report has them`);
+    if (!boxes.some(b => b.id === tab + "-table")) fail(`${tab} entry table is not a box`);
+    if (want.tables[tab] && !boxes.some(b => b.id === tab + "-table" && b.shown)) fail(`${tab} entry table not shown although the report has entries`);
+    if (!want.tables[tab] && boxes.some(b => b.id === tab + "-table" && b.shown)) fail(`${tab} entry table box shown although empty`);
+    const tall = boxes.filter(b => b.sh > b.h + 1);
+    if (tall.length) console.log(`scrollbox ${tab}:`, tall.map(b => `${b.id} ${b.h}/${b.sh}px`).join(", "));
+  }
+  if (want.tamper && await evalJs(`report.tamper.entries.length`) > 40) {
+    // a long entry table scrolls inside its box with the header row still visible at its top
+    const t = JSON.parse(await evalJs(`(() => { document.querySelector('[data-tab="tamper"]').click(); const w = document.querySelector("#tamper-table").parentElement; w.scrollTop = 600;
+      const th = w.querySelector("th").getBoundingClientRect().top, top = w.getBoundingClientRect().top; return JSON.stringify({ st: w.scrollTop, sh: w.scrollHeight, h: w.clientHeight, thOff: Math.round(th - top) }); })()`));
+    if (!(t.sh > t.h && t.st > 0)) fail("a long entry table does not scroll inside its box: " + JSON.stringify(t));
+    if (Math.abs(t.thOff) > 2) fail("entry table header did not stay at the box top: " + JSON.stringify(t));
+  }
+  if (want.findings > 20) {
+    // the box scrolls, and once at its end the wheel moves the page on (no scroll trap)
+    const r = JSON.parse(await evalJs(`(() => { const b = document.querySelector("#tamper-findings"); b.scrollIntoView({ block: "center" }); b.scrollTop = 1e9; const r = b.getBoundingClientRect();
+      return JSON.stringify({ st: b.scrollTop, sh: b.scrollHeight, h: b.clientHeight, x: r.left + r.width / 2, y: r.top + r.height / 2, panel: document.querySelector("#panel-tamper").scrollTop }); })()`));
+    if (!(r.sh > r.h && r.st > 0)) fail("a long findings list does not scroll inside its box: " + JSON.stringify(r));
+    for (let i = 0; i < 4; i++) { await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: r.x, y: r.y, deltaX: 0, deltaY: 300 }); await new Promise(res => setTimeout(res, 120)); }
+    const panelAfter = await evalJs(`document.querySelector("#panel-tamper").scrollTop`);
+    if (!(panelAfter > r.panel)) fail(`wheel at the end of the findings box did not move the page (${r.panel} → ${panelAfter})`);
+  }
+  // a new file starts every tab at its first row — also the tabs that were hidden during the
+  // load (an offset set under display:none is ignored), so scroll boxes on two tabs, reload from a third
+  {
+    const scrolled = [];
+    for (const [tab, sel] of [["gate", "#gate-table"], ["tamper", "#tamper-table"], ["tamper", "#tamper-findings"]]) {
+      await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
+      const st = await evalJs(`(() => { const e = document.querySelector("${sel}"); const b = e.classList.contains("scrollbox") ? e : e.parentElement; b.scrollTop = 1e9; return b.scrollTop; })()`);
+      if (st > 0) scrolled.push([tab, sel]);
+    }
+    await evalJs(`document.querySelector('[data-tab="content"]').click(); true`);
+    if (scrolled.length) {
+      const { result: { root: r3 } } = await S("DOM.getDocument");
+      const { result: { nodeId: n3 } } = await S("DOM.querySelector", { nodeId: r3.nodeId, selector: "#file" });
+      await S("DOM.setFileInputFiles", { files: [APK], nodeId: n3 });
+      await waitFor(`loadGen > reportGen`, 5000).catch(() => {});
+      await waitFor(`reportGen === loadGen && document.querySelector("#app").classList.contains("on")`);
+      for (const [tab, sel] of scrolled) {
+        await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
+        const st = await evalJs(`(() => { const e = document.querySelector("${sel}"); return (e.classList.contains("scrollbox") ? e : e.parentElement).scrollTop; })()`);
+        if (st !== 0) fail(`${sel} kept the previous file's scroll position (${st}) on the ${tab} tab`);
+      }
+      console.log("scroll reset checked:", scrolled.map(x => x[1]).join(", "));
+    }
+  }
   // images gallery: open the tab, let the visible thumbnails load, open the viewer on one
   await evalJs(`document.querySelector('[data-tab="images"]').click(); true`);
   const imgTotal = await evalJs(`document.querySelectorAll("#images-grid .itile").length`);

@@ -12,7 +12,7 @@
      built from and -N counts rebuilds against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "644c9e7-6";
+window.__APKLLM_BUILD = "644c9e7-7";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -235,12 +235,25 @@ window.__APKLLM_BUILD = "644c9e7-6";
   .kv dt { color:var(--fg-3); font:500 11.5px/1.7 var(--f-ui); }
   .kv dd { margin:0; color:var(--fg); word-break:break-all; line-height:1.7; }
   .checks { list-style:none; margin:0; padding:0; }
+  /* checks / findings lists: a tampered APK can produce hundreds of rows — they scroll inside
+     their own box (wheel / drag / keys) instead of stretching the page; ⧉ copy still takes
+     every row. No overscroll containment: at the box's end the wheel moves the page on. */
+  .scrollbox {
+    max-height:min(420px, 45vh); overflow:auto;
+    padding:8px 12px; border-radius:9px; background:var(--bg); box-shadow:inset 0 0 0 1px var(--line-2);
+  }
+  /* entry tables: the same box, taller; the sticky header row stays at the box's top */
+  .scrollbox.scrolltable { max-height:min(640px, 65vh); padding:0; background:transparent; box-shadow:inset 0 0 0 1px var(--line-1); }
+  .scrollbox.scrolltable:not(:has(tr)) { display:none; }   /* a refused container leaves no empty, focusable box */
+  @media (max-width:720px) { .scrollbox { max-height:40vh; } .scrollbox.scrolltable { max-height:50vh; } }
+  .scrollbox:focus-visible { outline:none; box-shadow:inset 0 0 0 1px rgba(107,161,255,0.55), 0 0 0 3px rgba(107,161,255,0.12); }
+  .scrollbox:empty { display:none; }
   .checks li { display:grid; grid-template-columns:96px 1fr; gap:12px; padding:9px 0; border-top:1px solid var(--line-1); font-size:12px; }
   .checks li:first-child { border-top:0; padding-top:2px; }
-  .checks .id { color:var(--fg); font-weight:600; }
+  .checks .id { color:var(--fg); font-weight:600; overflow-wrap:anywhere; }
   .checks .sev { color:var(--fg-3); font:500 10.5px var(--f-ui); margin-left:8px; padding:1px 7px; border-radius:999px; box-shadow:inset 0 0 0 1px var(--line-2); }
   .checks li > * { min-width:0; }
-  .checks .reason { color:var(--fg-2); margin-top:2px; overflow-wrap:anywhere; }
+  .checks .reason { color:var(--fg-2); margin-top:2px; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
   .checks .detail { color:var(--fg-3); font-size:11px; margin-top:4px; word-break:break-all; padding:6px 8px; background:var(--bg-1); border-radius:6px; box-shadow:inset 0 0 0 1px var(--line-1); max-height:140px; overflow:auto; }
   .form { display:flex; flex-wrap:wrap; gap:16px; align-items:end; }
   .form label { display:flex; flex-direction:column; gap:5px; font:600 10.5px var(--f-ui); color:var(--fg-3); letter-spacing:0.04em; text-transform:uppercase; }
@@ -291,9 +304,9 @@ window.__APKLLM_BUILD = "644c9e7-6";
   .sev-tamper { color:var(--bad); } .sev-suspicious { color:var(--warn); } .sev-info { color:var(--info); }
   .finding { padding:9px 0; border-top:1px solid var(--line-1); font-size:12px; }
   .finding:first-child { border-top:0; padding-top:2px; }
-  .finding .fid { font-weight:600; margin-right:8px; }
-  .finding .fentry { color:var(--fg-3); margin-left:8px; }
-  .finding .fdetail { color:var(--fg-2); margin-top:3px; white-space:normal; }
+  .finding .fid { font-weight:600; margin-right:8px; overflow-wrap:anywhere; }
+  .finding .fentry { color:var(--fg-3); margin-left:8px; overflow-wrap:anywhere; }
+  .finding .fdetail { color:var(--fg-2); margin-top:3px; white-space:normal; overflow-wrap:anywhere; }
   .err { color:var(--bad); }
   /* ── images gallery ──────────────────────────────────────────────── */
   .checker { background-color:#16181e; background-image:conic-gradient(#22252d 25%, transparent 0 50%, #22252d 0 75%, transparent 0); background-size:16px 16px; }
@@ -380,7 +393,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
     </div>
     <div class="card">
       <h2>Checks<button class="copybtn" type="button" data-copy="gate-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks" id="gate-checks"></ul>
+      <ul class="checks scrollbox" id="gate-checks" tabindex="0" role="region" aria-label="Install gate checks"></ul>
     </div>
     <div class="card">
       <h2>Entries <span class="tiny">(every entry libziparchive enumerates — failing gates are highlighted, never hidden)</span><button class="copybtn" type="button" data-copy="gate-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
@@ -389,7 +402,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
         <span id="gate-chips"></span>
         <span class="count" id="gate-count"></span>
       </div>
-      <div class="tablewrap"><table id="gate-table"></table></div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Install gate entries"><table id="gate-table"></table></div>
     </div>
   </section>
 
@@ -402,7 +415,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
     </div>
     <div class="card">
       <h2>Checks<button class="copybtn" type="button" data-copy="extract-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks" id="extract-checks"></ul>
+      <ul class="checks scrollbox" id="extract-checks" tabindex="0" role="region" aria-label="Extract checks"></ul>
     </div>
     <div class="card">
       <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract, or double-click a row to download it)</span><button class="copybtn" type="button" data-copy="extract-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
@@ -419,7 +432,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
         <button id="x-cancel" style="display:none">cancel</button>
         <span class="count" id="x-status"></span>
       </div>
-      <div class="tablewrap"><table id="extract-table"></table></div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Extract entries"><table id="extract-table"></table></div>
     </div>
   </section>
 
@@ -431,7 +444,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
     </div>
     <div class="card">
       <h2>Checks<button class="copybtn" type="button" data-copy="content-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks" id="content-checks"></ul>
+      <ul class="checks scrollbox" id="content-checks" tabindex="0" role="region" aria-label="Content checks"></ul>
     </div>
     <div class="card">
       <h2>Entries<button class="copybtn" type="button" data-copy="content-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
@@ -440,7 +453,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
         <span id="content-chips"></span>
         <span class="count" id="content-count"></span>
       </div>
-      <div class="tablewrap"><table id="content-table"></table></div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Content entries"><table id="content-table"></table></div>
       <div id="content-hex"></div>
     </div>
   </section>
@@ -467,11 +480,11 @@ window.__APKLLM_BUILD = "644c9e7-6";
     </div>
     <div class="card">
       <h2>Checks<button class="copybtn" type="button" data-copy="tamper-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks" id="tamper-checks"></ul>
+      <ul class="checks scrollbox" id="tamper-checks" tabindex="0" role="region" aria-label="Tamper scan checks"></ul>
     </div>
     <div class="card">
       <h2>Findings<button class="copybtn" type="button" data-copy="tamper-findings" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div id="tamper-findings"></div>
+      <div class="scrollbox" id="tamper-findings" tabindex="0" role="region" aria-label="Tamper findings"></div>
     </div>
     <div class="card">
       <h2>Raw walk <span class="tiny">(own ZIP reader, not libziparchive — Central Directory vs Local File Header; a divergent LFH field is red)</span><button class="copybtn" type="button" data-copy="tamper-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
@@ -479,7 +492,7 @@ window.__APKLLM_BUILD = "644c9e7-6";
         <input type="search" id="tamper-filter" placeholder="filter by name…">
         <span class="count" id="tamper-count"></span>
       </div>
-      <div class="tablewrap"><table id="tamper-table"></table></div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Raw walk entries"><table id="tamper-table"></table></div>
     </div>
   </section>
 
@@ -570,6 +583,7 @@ async function loadFile(file) {
     report = next; reportGen = gen;
     renderAll();
     drop.classList.add("hidden"); $("#app").classList.add("on");
+    resetPanelScroll(document.querySelector(".panel.on"));
     statusEl.innerHTML = "engine ready · <b>" + esc(file.name) + "</b>";
   } catch (e) {
     if (gen !== loadGen) return;
@@ -582,7 +596,17 @@ async function loadFile(file) {
 for (const t of document.querySelectorAll("#tabs .tab")) t.addEventListener("click", () => {
   document.querySelectorAll("#tabs .tab").forEach(x => x.classList.toggle("on", x === t));
   document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "panel-" + t.dataset.tab));
+  resetPanelScroll($("#panel-" + t.dataset.tab));
 });
+// A new file starts each tab — the panel and every list / table box in it — at its first row.
+// Only a SHOWN panel can be scrolled (an offset set under display:none is ignored and the old
+// one comes back), so each panel is reset the first time it is shown for a given file.
+function resetPanelScroll(panel) {
+  if (!panel || panel.dataset.gen === String(reportGen)) return;
+  panel.dataset.gen = reportGen;
+  panel.scrollTop = 0;
+  for (const b of panel.querySelectorAll(".scrollbox")) b.scrollTop = b.scrollLeft = 0;
+}
 
 // ── manifest inputs → re-run the gate ────────────────────────────────────
 function gateParams() {
@@ -607,7 +631,8 @@ async function rerunGate() {
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
-function renderAll() { renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); }
+function renderAll() {
+  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -905,6 +930,7 @@ function renderContentTable() {
   for (const tr of $("#content-table").querySelectorAll("tr[data-i]")) tr.addEventListener("click", (e) => { if (!e.target.closest(".copyable")) showHead(Number(tr.dataset.i), tr); });
 }
 function showHead(i, tr) {
+  requestAnimationFrame(() => $("#content-hex").scrollIntoView({ block: "nearest" }));   // the dump renders below the table box
   $("#content-table").querySelectorAll("tr.sel").forEach(x => x.classList.remove("sel"));
   tr.classList.add("sel");
   const h = report.content.heads[i];
