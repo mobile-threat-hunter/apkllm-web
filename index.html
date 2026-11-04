@@ -12,7 +12,7 @@
      built from and -N counts rebuilds against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "644c9e7-5";
+window.__APKLLM_BUILD = "644c9e7-6";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -448,7 +448,7 @@ window.__APKLLM_BUILD = "644c9e7-5";
   <!-- ── Images ───────────────────────────────────────────────────── -->
   <section class="panel" id="panel-images">
     <div class="card">
-      <h2>Images <span class="tiny">(entries whose bytes are an image by magic, plus entries NAMED like an image whose bytes are not — each rendered from its own device reader's output)</span><button class="copybtn" type="button" data-copy="images" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <h2>Images <span class="tiny">(entries whose bytes are an image by magic, whatever their name — each rendered from its own device reader's output)</span><button class="copybtn" type="button" data-copy="images" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
         <input type="search" id="images-filter" placeholder="filter by name…">
         <span id="images-chips"></span>
@@ -922,14 +922,14 @@ function showHead(i, tr) {
 
 // Images -------------------------------------------------------------------
 // The gallery is the Content tab's classification seen as pictures: an entry is listed when
-// its device-produced bytes are an image by magic (category "image"), or when its NAME claims
-// an image (extension) and its bytes are something else — a payload hidden under a .png is
-// shown as such, never dropped. Pixels come only from extractEntry (the entry's own mapped
+// its device-produced bytes are an image by magic (category "image") — whatever its name. A
+// name that claims an image over other bytes is the Content tab's "ext ≠ content" flag, not
+// a picture, so it is not repeated here. Pixels come only from extractEntry (the entry's own mapped
 // reader, exactly what "bytes" downloads); the Blob's MIME type is taken from the magic, never
 // from the name. Thumbnails load lazily — only tiles in view of the open tab, a few at a time,
 // and a tile scrolled away before its turn leaves the queue.
 const IMG_MIME = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", ico: "image/x-icon", avif: "image/avif" };
-const IMG_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "heic", "avif"]);   // EXT_EXPECTS keys that expect an image
+const IMG_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "heic", "avif"]);   // EXT_EXPECTS keys that expect an image (viewer's name-vs-bytes pill)
 const IMG_AUTO_MAX = 16 * 1024 * 1024;     // larger entries load on request
 const IMG_KEEP_MAX = 256 * 1024;           // an entry up to this size keeps its own bytes as the thumbnail (animation, crisp icons)…
 const IMG_KEEP_BUDGET = 128 * 1024 * 1024; // …while the kept total stays under this; anything else becomes a small canvas thumbnail
@@ -938,7 +938,7 @@ const IMG_MAX_PIXELS = 24 * 1024 * 1024;   // never decode a bitmap bigger than 
 const IMG_PARALLEL = 3;
 const imgExtOf = (name) => { const b = name.slice(name.lastIndexOf("/") + 1), d = b.lastIndexOf("."); return d > 0 ? b.slice(d + 1).toLowerCase() : ""; };
 let imgItems = [], imgTypeOn = null, imgRun = null, imgObserver = null, imgTiles = new Map(), imgGridDirty = false;
-const imgKind = (it) => it.isImage ? it.ctype : it.state === "unreadable" ? "unreadable" : it.state === "empty" ? "empty" : it.state === "unaddressable" ? "unaddressable" : "not an image";
+const imgKind = (it) => it.ctype;
 
 function stopImages() {   // a new drop: nothing queued for the old APK is sent to the worker any more
   if (imgRun) imgRun.queue.length = 0;
@@ -965,15 +965,14 @@ function renderImages() {
   const nameCount = new Map();
   for (const e of c.entries) nameCount.set(e.name, (nameCount.get(e.name) ?? 0) + 1);
   c.entries.forEach((e, i) => {
-    const ext = imgExtOf(e.name), isImage = e.category === "image";
-    if (!isImage && !IMG_EXTS.has(ext)) return;
+    if (e.category !== "image") return;
+    const ext = imgExtOf(e.name);
     // gate and content enumerate the same libziparchive order; fall back to a name match
     const gi = g.ok && g.entries[i]?.name === e.name ? i : g.ok && nameCount.get(e.name) === 1 ? g.entries.findIndex(x => x.name === e.name) : -1;
     const size = gi >= 0 ? g.entries[gi].uncompressed_size : null;
-    imgItems.push({ i, gi, name: e.name, ctype: e.content_type, ext, isImage, extMismatch: e.extension_mismatch,
-      size, mime: isImage ? IMG_MIME[e.content_type] ?? null : null, read: null, headRead: e.disposition,
-      state: !isImage ? (e.extension_mismatch === null ? "unreadable" : size === 0 ? "empty" : "disguised")
-        : nameCount.get(e.name) > 1 ? "unaddressable"
+    imgItems.push({ i, gi, name: e.name, ctype: e.content_type, ext, extMismatch: e.extension_mismatch,
+      size, mime: IMG_MIME[e.content_type] ?? null, read: null,
+      state: nameCount.get(e.name) > 1 ? "unaddressable"
         : !IMG_MIME[e.content_type] ? "nodecode" : size > IMG_AUTO_MAX ? "large" : "idle" });
   });
   const types = {};
@@ -1017,16 +1016,14 @@ function renderImageGrid() {
 // found unaddressable when its lookup misses)
 function imgSummary() {
   const n = $("#n-images"), count = (st) => imgItems.filter(it => it.state === st).length;
-  const disguised = count("disguised"), unreadable = count("unreadable"), unaddr = count("unaddressable");
+  const unaddr = count("unaddressable");
   n.textContent = imgItems.length;
-  n.classList.toggle("alert", disguised > 0); n.classList.toggle("warn", !disguised && (unreadable > 0 || unaddr > 0));
+  n.classList.remove("alert"); n.classList.toggle("warn", unaddr > 0);
   const notes = [];
-  if (disguised) notes.push(`<span class="pill bad">${disguised} named like an image, bytes are not</span>`);
-  if (unreadable) notes.push(`<span class="pill warn">${unreadable} named like an image, its reader produced no bytes</span>`);
   if (unaddr) notes.push(`<span class="pill warn">${unaddr} not addressable by name (invalid UTF-8 / names decode alike)</span>`);
-  const em = imgItems.filter(it => it.isImage && it.extMismatch === true).length;
+  const em = imgItems.filter(it => it.extMismatch === true).length;
   if (em) notes.push(`<span class="pill warn">${em} image${em === 1 ? "" : "s"} under a name that expects other content</span>`);
-  if (!imgItems.length) notes.push('<span class="tiny">no entry is an image by magic or by name</span>');
+  if (!imgItems.length) notes.push('<span class="tiny">no entry is an image by magic</span>');
   $("#images-note").innerHTML = notes.length ? `<div class="toolbar">${notes.join(" ")}</div>` : "";
 }
 // what a tile / the viewer shows instead of pixels
@@ -1035,28 +1032,26 @@ function imgPlaceholder(it) {
     case "idle": case "queued": case "loading": return '<span class="ph"><span class="spin"></span></span>';
     case "large": return `<span class="ph">${fmtSize(it.size)} — click to load</span>`;
     case "nodecode": return `<span class="ph">${esc(it.ctype)}<br>not renderable in a browser</span>`;
-    case "unreadable": return `<span class="ph">named .${esc(it.ext)}<br>reader: ${esc(it.headRead)} — no bytes</span>`;
     case "unaddressable": return '<span class="ph">another entry\'s name decodes the same — not addressable by name</span>';
-    case "disguised": return `<span class="ph bad">${esc(it.ctype)} bytes<br>named .${esc(it.ext)}</span>`;
     case "decodefail": return `<span class="ph">${esc(it.ctype)} · ${it.w}×${it.h}<br>decode failed — click to retry</span>`;
     case "undecodable": return `<span class="ph bad">${esc(it.ctype)} magic, but the browser cannot decode it</span>`;
-    case "huge": return `<span class="ph">${it.w}×${it.h}<br>too many pixels to draw</span>`;
+    case "huge": return `<span class="ph">${it.w}×${it.h} ≈ ${fmtMem(it.w * it.h * 4)} decoded<br>over the auto-decode limit — open to decode</span>`;
     case "empty": return '<span class="ph">empty entry (0 bytes)</span>';
     default: return `<span class="ph bad">extract failed<br>${esc(it.err ?? "")}</span>`;
   }
 }
 function imgMeta(it) {
-  const parts = [it.isImage ? it.ctype : it.state === "disguised" ? "≠ image" : it.state];
+  const parts = [it.ctype];
   if (it.w != null) parts.push(`${it.w}×${it.h}`);
   if (it.size != null) parts.push(fmtSize(it.size));
   return parts.join(" · ");
 }
 function paintTile(el, it) {
-  el.className = "itile" + (it.state === "disguised" || it.state === "err" || it.state === "undecodable" ? " fail"
-    : it.extMismatch === true || ["unreadable", "unaddressable", "decodefail", "huge"].includes(it.state) ? " flag" : "");
+  el.className = "itile" + (it.state === "err" || it.state === "undecodable" ? " fail"
+    : it.extMismatch === true || ["unaddressable", "decodefail", "huge"].includes(it.state) ? " flag" : "");
   const thumb = it.state === "ok" ? `<img src="${it.url}" alt="">` : imgPlaceholder(it);
   el.innerHTML = `<div class="ithumb checker">${thumb}</div><div class="iname">${esc(it.name)}</div>
-    <div class="imeta">${esc(imgMeta(it))}${it.extMismatch === true && it.isImage ? ' <span class="pill warn">ext ≠ content</span>' : ""}</div>`;
+    <div class="imeta">${esc(imgMeta(it))}${it.extMismatch === true ? ' <span class="pill warn">ext ≠ content</span>' : ""}</div>`;
 }
 function repaint(k) {
   const el = imgTiles.get(k); if (el) paintTile(el, imgItems[k]);
@@ -1123,7 +1118,23 @@ function imgDims(ctype, b) {
   } catch (_) { /* fall through */ }
   return null;
 }
-let imgDecodeChain = Promise.resolve();   // one decode at a time: concurrent decodes share the browser's image budget
+// One decode at a time: decodes share the browser's image budget, and Chrome frees a big
+// decoded bitmap lazily — a decode started right after one can be refused although its bytes
+// are fine. So a big decode is followed by a settle gap, and a refused decode is retried once.
+let imgDecodeChain = Promise.resolve();
+const IMG_SETTLE_PIXELS = 4 * 1024 * 1024, IMG_SETTLE_MS = 400;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function chainDecode(fn, pixels) {
+  const job = imgDecodeChain.then(fn);
+  imgDecodeChain = job.catch(() => {}).then(() => pixels > IMG_SETTLE_PIXELS ? sleep(IMG_SETTLE_MS) : undefined);
+  return job;
+}
+async function decodeImg(img) {   // true when decoded (after at most one retry)
+  try { await img.decode(); return true; } catch (_) { /* maybe the lazy budget — retry once */ }
+  await sleep(IMG_SETTLE_MS * 1.5);
+  try { await img.decode(); return true; } catch (_) { return false; }
+}
+const fmtMem = (n) => n >= 2 ** 40 ? "> 1 TiB" : n >= 2 ** 30 ? (n / 2 ** 30).toFixed(1) + " GiB" : fmtSize(n);
 const IMG_KEEP_PIXELS = 512 * 512;        // a kept original must also be small as a bitmap
 // decoded image → what the tile keeps: its own bytes when small (and within the kept budget),
 // otherwise a ≤200px canvas thumbnail, so a gallery of padded "PNGs" cannot pin the tab's memory
@@ -1131,9 +1142,7 @@ function makeThumb(run, it, data) {
   let dims = imgDims(it.ctype, data);
   if (dims && (!dims[0] || !dims[1])) dims = null;   // a zero dimension is not a parse
   if (dims) { [it.w, it.h] = dims; if (it.w * it.h > IMG_MAX_PIXELS) { it.state = "huge"; return Promise.resolve(); } }
-  const job = imgDecodeChain.then(() => run === imgRun ? decodeThumb(run, it, data, !!dims) : undefined);
-  imgDecodeChain = job.catch(() => {});
-  return job;
+  return chainDecode(() => run === imgRun ? decodeThumb(run, it, data, !!dims) : undefined, dims ? it.w * it.h : IMG_MAX_PIXELS);
 }
 async function decodeThumb(run, it, data, headerOk) {
   const url = URL.createObjectURL(new Blob([data], { type: it.mime }));
@@ -1143,7 +1152,7 @@ async function decodeThumb(run, it, data, headerOk) {
   // corrupt body would pass as a blank picture with plausible dimensions
   // a header that parsed but a body that will not decode may be the browser's resource limit
   // rather than broken bytes: "decodefail" is retryable (click), "undecodable" is not
-  try { await probe.decode(); } catch (_) { URL.revokeObjectURL(url); it.state = headerOk ? "decodefail" : "undecodable"; return; }
+  if (!(await decodeImg(probe))) { URL.revokeObjectURL(url); it.state = headerOk ? "decodefail" : "undecodable"; return; }
   it.w = probe.naturalWidth; it.h = probe.naturalHeight;
   if (it.w * it.h > IMG_MAX_PIXELS) { URL.revokeObjectURL(url); it.state = "huge"; return; }
   if (data.length <= IMG_KEEP_MAX && it.w * it.h <= IMG_KEEP_PIXELS && run.kept + data.length <= IMG_KEEP_BUDGET) { run.kept += data.length; it.url = url; it.full = true; it.state = "ok"; return; }
@@ -1185,6 +1194,7 @@ for (const t of document.querySelectorAll('#tabs .tab[data-tab="images"]')) t.ad
 // viewer: the picture at a readable zoom + the entry's facts; "bytes" downloads exactly these bytes.
 // A tile that only holds a canvas thumbnail is re-extracted (same reader) for the full picture.
 let ivOpen = null, ivUrl = null, ivSeq = 0, ivPending = false;
+let ivImg = null, ivDecoding = false;   // a "huge" picture decoded on request, held only while the viewer shows it
 function openImage(k) {
   closeImage();
   const it = imgItems[k];
@@ -1193,7 +1203,7 @@ function openImage(k) {
   if (it.state === "ok" && !it.full) loadFull(k);
 }
 function closeImage() {
-  ivOpen = null; ivSeq++; ivPending = false;
+  ivOpen = null; ivSeq++; ivPending = false; ivImg = null; ivDecoding = false;
   if (ivUrl) { URL.revokeObjectURL(ivUrl); ivUrl = null; }
   $("#imgview").classList.remove("on"); $("#iv-card").innerHTML = "";
 }
@@ -1210,6 +1220,32 @@ async function loadFull(k) {
   } catch (_) { /* the thumbnail stays */ }
   finally { if (seq === ivSeq) ivPending = false; }
 }
+// A "huge" entry is never decoded by the gallery; this decodes it once, on request, through the
+// same serial decode chain (never alongside a thumbnail decode), shows the decoded element itself
+// in the viewer (no second decode for display) and drops it — and its URL — on close.
+async function forceDecode(k) {
+  if (ivDecoding || ivOpen !== k) return;
+  const seq = ivSeq, run = imgRun, it = imgItems[k];
+  const live = () => seq === ivSeq && run === imgRun && run.gen === loadGen;
+  ivDecoding = true; paintViewerBody(k);
+  const say = (html) => { const st = $("#iv-dstatus"); if (st && live()) setXStatus(html, st); };
+  try {
+    const r = await wcall({ type: "extract", name: it.name });
+    if (!live()) return;
+    if (!r.ok) { say(`<span class="err">${esc(r.error)}</span>`); return; }
+    await chainDecode(async () => {
+      if (!live()) return;
+      const url = URL.createObjectURL(new Blob([r.data], { type: it.mime }));
+      const img = new Image(); img.alt = ""; img.src = url;
+      if (!(await decodeImg(img))) { URL.revokeObjectURL(url); if (live()) say('<span class="err">the browser could not decode it (its size limit or a corrupt body)</span>'); return; }
+      if (!live()) { URL.revokeObjectURL(url); return; }
+      if (ivUrl) URL.revokeObjectURL(ivUrl);
+      ivUrl = url; ivImg = img;
+      say(`decoded ${img.naturalWidth}×${img.naturalHeight}${img.naturalWidth !== it.w || img.naturalHeight !== it.h ? ` <span class="err">(header said ${it.w}×${it.h})</span>` : ""} — released when the viewer closes`);
+    }, it.w * it.h);
+  } catch (e) { say(`<span class="err">${esc(e.message)}</span>`); }
+  finally { if (seq === ivSeq) { ivDecoding = false; paintViewerBody(k); } }
+}
 function paintViewer(k) {
   const it = imgItems[k];
   $("#iv-card").innerHTML = `<h2>Image<button type="button" id="iv-close" style="margin-left:auto" title="Close (Esc)">✕ close</button></h2>
@@ -1217,26 +1253,27 @@ function paintViewer(k) {
     <div class="toolbar" style="margin-top:12px">
       ${it.gi >= 0 ? `<button id="iv-bytes" title="${BYTES_TITLE}">bytes</button>` : ""}
       <button id="iv-load" style="display:none">load</button>
+      <button id="iv-decode" style="display:none"></button>
+      <span class="count" id="iv-dstatus"></span>
       <span class="count" id="iv-status"></span>
     </div>
-    ${!it.isImage ? '<p class="note">The Content tab\'s hex view shows this entry\'s first 512 device-produced bytes.</p>' : ""}`;
+    `;
   $("#iv-close").addEventListener("click", closeImage);
   $("#iv-bytes")?.addEventListener("click", (e) => extractAndSave(it.gi, e.currentTarget, $("#iv-status")));
   $("#iv-load").addEventListener("click", () => { imgItems[k].requested = true; queueImage(k); });
+  $("#iv-decode").addEventListener("click", () => forceDecode(k));
   paintViewerBody(k);
 }
 // only the picture + facts: the toolbar (and a running download's status) survives a repaint
 function paintViewerBody(k) {
   const it = imgItems[k], body = $("#iv-body"); if (!body) return;
   let pic = imgPlaceholder(it);
-  const src = ivUrl ?? (it.state === "ok" && it.full ? it.url : null);
-  if (src || it.state === "ok") {
+  const src = ivImg ? null : ivUrl ?? (it.state === "ok" && it.full ? it.url : null);   // ivImg: the decoded element is moved in below
+  if (!ivImg && (src || it.state === "ok")) {
     const zoom = Math.max(1, Math.min(8, Math.floor(256 / Math.max(it.w, it.h, 1))));
     pic = `<img src="${src ?? it.url}" alt=""${zoom > 1 ? ` class="px" style="width:${it.w * zoom}px"` : src ? "" : ` style="width:${Math.min(it.w, 900)}px"`}>`;
   }
-  const same = !it.isImage
-    ? (it.state === "disguised" ? '<span class="pill bad">named like an image, bytes are not</span>' : `<span class="pill na">${esc(it.state)}</span>`)
-    : it.extMismatch === true ? '<span class="pill warn">extension ≠ content</span>'
+  const same = it.extMismatch === true ? '<span class="pill warn">extension ≠ content</span>'
     : IMG_EXTS.has(it.ext) ? '<span class="pill ok">consistent</span>' : `<span class="pill na">no expectation for .${esc(it.ext || "∅")}</span>`;
   body.innerHTML = `<div class="bigthumb checker">${pic}</div>
     <dl class="kv">
@@ -1245,10 +1282,18 @@ function paintViewerBody(k) {
       <dt>name vs bytes</dt><dd>${same} <span class="tiny">.${esc(it.ext || "∅")}</span></dd>
       <dt>dimensions</dt><dd>${it.w != null ? `${it.w} × ${it.h}${/\.9\.png$/i.test(it.name) ? ' <span class="tiny">9-patch (1px stretch/padding border included)</span>' : ""}` : "—"}</dd>
       <dt>size</dt><dd>${it.size != null ? `${it.size} bytes (${fmtSize(it.size)})` : "—"}</dd>
-      <dt>read</dt><dd>${it.read ? esc(it.read) + " by its own reader" : `head: ${esc(it.headRead)}`}</dd>
+      <dt>read</dt><dd>${it.read ? esc(it.read) + " by its own reader" : "—"}</dd>
       ${it.err ? `<dt>error</dt><dd class="err">${esc(it.err)}</dd>` : ""}
     </dl>`;
   const ld = $("#iv-load"); if (ld) ld.style.display = it.state === "large" ? "" : "none";
+  const dc = $("#iv-decode");
+  if (dc) {
+    dc.style.display = it.state === "huge" && !ivImg ? "" : "none";
+    dc.disabled = ivDecoding;
+    dc.textContent = ivDecoding ? "decoding…" : `decode anyway (${it.w}×${it.h} ≈ ${fmtMem(it.w * it.h * 4)})`;
+    dc.title = "decode this one picture in the viewer only — it is released when the viewer closes; the browser may refuse very large sizes";
+  }
+  if (ivImg) body.querySelector(".bigthumb").replaceChildren(ivImg);
 }
 $("#imgview").addEventListener("click", (e) => { if (e.target.id === "imgview") closeImage(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && ivOpen !== null) closeImage(); });
@@ -1319,8 +1364,8 @@ const COPY = {
     if (!h) return "";
     return `entry\t${cell(h.name)}\nread\t${h.disposition}\nbytes\t${h.head.length}${h.complete ? " (whole entry)" : ""}\n` + ($("#content-hex pre.hex")?.textContent || "");
   },
-  "images": () => report.content.ok ? tsv(["#", "name", "content_type", "extension", "bytes_are_image", "extension_mismatch", "size", "width", "height", "read", "status", "error"],
-    imgItems.map(it => [it.i, it.name, it.ctype, it.ext, it.isImage, tri3(it.extMismatch), it.size ?? "", it.w ?? "", it.h ?? "", it.read ?? "", it.state, it.err ?? ""])) : unavailable(report.content, "unavailable"),
+  "images": () => report.content.ok ? tsv(["#", "name", "content_type", "extension", "extension_mismatch", "size", "width", "height", "read", "status", "error"],
+    imgItems.map(it => [it.i, it.name, it.ctype, it.ext, tri3(it.extMismatch), it.size ?? "", it.w ?? "", it.h ?? "", it.read ?? "", it.state, it.err ?? ""])) : unavailable(report.content, "unavailable"),
   "tamper-head": () => report.tamper.ok ? kvText($("#tamper-head")) : unavailable(report.tamper, "raw walk failed"),
   "tamper-checks": () => report.tamper.ok ? checksText(report.tamper.checks) : unavailable(report.tamper, "raw walk failed"),
   "tamper-findings": () => report.tamper.ok ? tsv(["severity", "id", "entry", "detail"], report.tamper.findings.map(f => [f.severity, f.id, f.entry || "(whole file)", f.detail])) : unavailable(report.tamper, "raw walk failed"),

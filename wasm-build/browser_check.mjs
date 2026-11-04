@@ -360,6 +360,27 @@ try {
     if (!iv) fail("image viewer did not open");
     await evalJs(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true`);
     if (await evalJs(`document.querySelector("#imgview").classList.contains("on")`)) fail("image viewer did not close on Escape");
+    // a "huge" entry (header over the pixel cap) is never decoded by the gallery, only on request
+    const hk = await evalJs(`imgItems.findIndex(it => it.state === "huge")`);
+    if (hk >= 0) {
+      // close mid-decode, reopen, decode again: nothing stale may survive, and the second decode
+      // must not be refused because the first one's bitmap is still held (Chrome frees it lazily)
+      await evalJs(`openImage(${hk}); document.querySelector("#iv-decode").click(); true`);
+      await new Promise(r => setTimeout(r, 30));
+      await evalJs(`closeImage(); true`);
+      if (await evalJs(`ivImg !== null || ivUrl !== null || ivDecoding`)) fail("closing mid-decode left viewer state behind");
+      await evalJs(`openImage(${hk}); document.querySelector("#iv-decode").click(); true`);
+      await waitFor(`!ivDecoding`, 60000);
+      const hd = await evalJs(`JSON.stringify({ img: !!ivImg, shown: !!document.querySelector("#iv-body .bigthumb img"), status: document.querySelector("#iv-dstatus").textContent, tileState: imgItems[${hk}].state, px: imgItems[${hk}].w * imgItems[${hk}].h })`);
+      console.log("huge decode:", hd);
+      const h = JSON.parse(hd);
+      // up to 64 Mpx Chrome decodes a valid bitmap: it must be SHOWN, a refusal there is a bug;
+      // beyond that a refusal is fine but must be explained
+      if (h.px <= 64 * 1024 * 1024 ? !(h.img && h.shown) : !(h.img && h.shown) && !/could not decode/.test(h.status)) fail("decode-on-request failed: " + hd);
+      if (h.tileState !== "huge") fail("decode-on-request changed the tile state");
+      await evalJs(`closeImage(); true`);
+      if (await evalJs(`ivImg !== null || ivUrl !== null`)) fail("decoded picture not released on close");
+    }
     // a new drop with the viewer open must close it at once — its "bytes" would otherwise
     // extract from the NEW /input.apk under the old report's name (review P1)
     await evalJs(`document.querySelector("#images-grid .itile").click(); true`);
