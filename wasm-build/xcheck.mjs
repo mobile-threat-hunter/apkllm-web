@@ -141,6 +141,8 @@ for (const [path, n] of Object.entries(native)) {
     const key = name.startsWith("x:") ? Uint8Array.from(name.slice(2).match(/../g) || [], h => parseInt(h, 16)) : name.slice(2);
     const r = m.extractEntry(VFS, key, 512 * 1024 * 1024);
     const we = r.ok ? { ok: true, disposition: r.disposition, size: r.data.length, sha256: createHash("sha256").update(r.data).digest("hex") } : { ok: false, error: r.error };
+    // the entry extractEntry reports is the one asked for (its own name_hex, #40)
+    if (r.ok) diff(`extracted[${name}].name_hex`, r.name_hex ? "x:" + r.name_hex : "s:" + r.name, name);
     diff(`extracted[${name}]`, we, ne);
   }
   console.log(`  ${Object.keys(n.extracted).length} entries extracted & compared`);
