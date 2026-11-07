@@ -370,7 +370,7 @@ function contentMap(r, headBytes) {
     const readable = e.disposition === "stored" || e.disposition === "inflate" || e.disposition === "lenient_stored";
     const [ctype, detail] = readable ? classify(head, size) : ["unknown", {}];
     const item = {
-      name: e.name, class: e.class, method: e.method, disposition: e.disposition,
+      name: e.name, name_hex: e.name_hex, class: e.class, method: e.method, disposition: e.disposition,
       content_type: ctype, category: CATEGORY[ctype] ?? "unknown", detail,
       entropy: readable ? Math.round(entropy(head) * 1000) / 1000 : null,
       size_validated: Boolean(e.complete) && (e.disposition === "stored" || e.disposition === "inflate"),
@@ -402,7 +402,7 @@ function contentMap(r, headBytes) {
     role_mismatch: roleBad.length, role_indeterminate: roleUnk.length,
     extension_mismatch: extBad.length, extension_indeterminate: extUnk.length,
   };
-  const sample = (items) => items.slice(0, 20).map(it => ({ name: it.name, content_type: it.content_type }));
+  const sample = (items) => items.slice(0, 20).map(it => ({ name: it.name, name_hex: it.name_hex, content_type: it.content_type }));
   const plural = (n) => n === 1 ? "y" : "ies";
   const checks = [
     check("content.role_consistent",
@@ -427,13 +427,20 @@ function contentMap(r, headBytes) {
   return { ok: true, head_bytes: headBytes, entry_count: entries.length, summary, checks, entries };
 }
 
+// container._named (#40): a detail list of names, plus an aligned `<key>_hex` when any is lossy.
+function named(key, es) {
+  const out = { [key]: es.map(e => e.name) };
+  if (es.some(e => e.name_hex)) out[key + "_hex"] = es.map(e => e.name_hex);
+  return out;
+}
+
 // container._container_checks over an install_gate() result.
 function containerChecks(r) {
   const entries = r.entries;
   const declared = r.extract_native_libs;              // true / false / null
   const consistent = r.consistent_extract_native_libs;  // subset of ["false","true"]
-  const badLibs = r.exceptions.filter(i => entries[i].class === "native_lib").map(i => entries[i].name);
-  const forgedLibs = entries.filter(e => e.class === "native_lib" && !e.method_known).map(e => e.name);
+  const badLibs = r.exceptions.filter(i => entries[i].class === "native_lib").map(i => entries[i]);
+  const forgedLibs = entries.filter(e => e.class === "native_lib" && !e.method_known);
   const ifFalse = r.installable_if_extract_false, ifTrue = r.installable_if_extract_true;
   let nlOk;
   if (declared === true) nlOk = ifTrue;
@@ -448,12 +455,12 @@ function containerChecks(r) {
   else if (nlOk === false) nlReason = `${failing.length} native lib(s) fail install — INSTALL_FAILED_INVALID_APK` + (declared === null ? " under BOTH extractNativeLibs values (forged method ∉ {0,8})" : "");
   else nlReason = `${failing.length} native lib(s) compressed/unaligned — INSTALL_FAILED_INVALID_APK IF extractNativeLibs=false (declared value unknown)`;
   const checks = [check("container.native_lib_gate", nlOk, "install_fatal", nlReason,
-    (failing.length && nlOk !== true) ? { failing } : null)];
+    (failing.length && nlOk !== true) ? named("failing", failing) : null)];
 
-  const badDex = entries.filter(e => e.class === "dex" && !e.method_known).map(e => e.name);
+  const badDex = entries.filter(e => e.class === "dex" && !e.method_known);
   checks.push(check("container.dex_gate", badDex.length === 0, "load_fatal",
     badDex.length ? `${badDex.length} dex with forged compression method — will not load` : "all dex method ∈ {0,8}",
-    badDex.length ? { forged: badDex } : null));
+    badDex.length ? named("forged", badDex) : null));
 
   const pyList = (xs) => "[" + xs.map(x => `'${x}'`).join(", ") + "]";  // Python's repr of the list
   let enlOk, enlReason;
@@ -570,7 +577,7 @@ function extractReport(g) {
   if (!g.ok) return g;
   const entries = g.entries.map(e => {
     const d = disposition(e, g.extract_native_libs, g.page_size);
-    return { name: e.name, class: e.class, method: e.method, primary_multidex: e.primary_multidex, ...d,
+    return { name: e.name, name_hex: e.name_hex, class: e.class, method: e.method, primary_multidex: e.primary_multidex, ...d,
              decompresses: e.method === 8 && d.deliverable };
   });
   const byDisp = {}, byReader = {};
@@ -578,7 +585,7 @@ function extractReport(g) {
     byDisp[e.disposition] = (byDisp[e.disposition] ?? 0) + 1;
     byReader[e.reader] = (byReader[e.reader] ?? 0) + 1;
   }
-  const brief = (e) => ({ name: e.name, reader: e.reader, method: e.method });
+  const brief = (e) => ({ name: e.name, name_hex: e.name_hex, reader: e.reader, method: e.method });
   const forged = entries.filter(e => e.diverges).map(brief);
   const undeliverable = entries.filter(e => !e.deliverable).map(brief);
   const plural = (n) => n === 1 ? "y" : "ies";

@@ -40,7 +40,7 @@ node xcheck.mjs /tmp/native.json                # → ALL MATCH
 
 `xcheck` compares content_map / tamper_report / install_gate + extract_report (six input
 combinations) field by field, including the `checks[]` reasons `domain.js` reproduces from
-Python, and runs `extract_entry` on every entry name on both sides (sha256 of the
+Python, and runs `extract_entry` on every entry on both sides — keyed `x:<name_hex>` (raw bytes) for a lossy name, else `s:<name>` (sha256 of the
 device-faithful bytes, or the identical rejection error).
 
 ## Layout
@@ -52,7 +52,9 @@ device-faithful bytes, or the identical rejection error).
   (`__BEGIN_DECLS`); same shim axmlllm-web uses.
 - `wasm_module.cpp` — embind functions mirroring `apkllm/native/binding/module.cpp`
   one-to-one (`installGate`, `extractEntry`, `entryHeads`, `locateSigningBlock`,
-  `tamperScan`; same field names, Python `None` ⇄ JS `null`).
+  `tamperScan`; same field names incl. `name_hex` / `entry_hex` for a name that is not strict
+  UTF-8, Python `None` ⇄ JS `null`; `extractEntry` takes the name as a string or, for a lossy
+  name, a `Uint8Array` of its raw bytes — Python's `bytes`).
 - `smoke.mjs` — node smoke test; self-consistency across the five functions. Ground
   truth is the native binding on the same files:
   `cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -c 'import sys; sys.path.insert(0,"build/dev"); import _apk_core as c; print(c.install_gate(PATH, arsc_scope=None)["entry_count"])'`

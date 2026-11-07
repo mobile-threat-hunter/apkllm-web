@@ -32,7 +32,7 @@ function diff(where, a, b) {
 }
 // Python repr differences that are not semantic: None→null handled by JSON; floats compared with tolerance.
 function cmpEntry(where, w, n) {
-  for (const k of ["name", "class", "method", "disposition", "content_type", "category", "detail", "unknown_kind", "size_validated", "encrypted_flag", "role_mismatch", "extension_mismatch", "error"])
+  for (const k of ["name", "name_hex", "class", "method", "disposition", "content_type", "category", "detail", "unknown_kind", "size_validated", "encrypted_flag", "role_mismatch", "extension_mismatch", "error"])
     diff(`${where}.${k}`, w[k] ?? null, n[k] ?? null);
   const ew = w.entropy, en = n.entropy;
   if ((ew == null) !== (en == null) || (ew != null && Math.abs(ew - en) > 0.0015)) diff(`${where}.entropy`, ew, en);
@@ -66,14 +66,18 @@ for (const [path, n] of Object.entries(native)) {
     const normSum = (s) => ({ ...s, by_content_type: sortedObj(s.by_content_type), by_category: sortedObj(s.by_category), unknown_by_kind: sortedObj(s.unknown_by_kind) });
     const sumW = normSum(c.summary), sumN = normSum(n.content.summary);
     diff("content.summary", sumW, sumN);
-    // check detail.sample is in iteration order too — compare as a name-sorted list
-    const normChecks = (cs) => cs.map(x => x.detail?.sample ? { ...x, detail: { ...x.detail, sample: [...x.detail.sample].sort((a, b) => a.name < b.name ? -1 : 1) } } : x);
+    // check detail.sample is the FIRST 20 in iteration order (murmur2 on wasm32 vs CityHash on
+    // x86-64): compare it as a (name, name_hex)-sorted list when it holds every mismatch, else only
+    // its length (the two sides may pick different 20 of more)
+    const rowKey = (a) => a.name + "|" + (a.name_hex ?? "");
+    const byKey = (xs) => [...xs].sort((a, b) => rowKey(a) < rowKey(b) ? -1 : rowKey(a) > rowKey(b) ? 1 : 0);
+    const normChecks = (cs) => cs.map(x => x.detail?.sample ? { ...x, detail: { ...x.detail, sample: x.detail.count > 20 ? x.detail.sample.length : byKey(x.detail.sample) } } : x);
     cmpChecks("content.checks", normChecks(c.checks), normChecks(n.content.checks));
     const nm = byName(n.content.entries);
     diff("content.names", [...byName(c.entries).keys()].sort(), [...nm.keys()].sort());
     // names that decode alike (U+FFFD) have several candidates: compare against the closest one
     const closest = (cands, e, keys) => cands.find(x => keys.every(k => JSON.stringify(x[k]) === JSON.stringify(e[k]))) || cands[0];
-    for (const e of c.entries) { const nn = closest(nm.get(e.name) || [], e, ["method", "content_type", "detail", "unknown_kind", "entropy", "size_validated"]); if (nn) cmpEntry(`content[${e.name}]`, e, nn); }
+    for (const e of c.entries) { const nn = closest(nm.get(e.name) || [], e, ["name_hex", "method", "content_type", "detail", "unknown_kind", "entropy", "size_validated"]); if (nn) cmpEntry(`content[${e.name}]`, e, nn); }
   } else diff("content.error", c.error, n.content.error);
 
   // tamper
@@ -99,7 +103,20 @@ for (const [path, n] of Object.entries(native)) {
     const gm = byName(ng.entries);
     diff(`${w}.names`, [...byName(g.entries).keys()].sort(), [...gm.keys()].sort());
     for (const e of g.entries) { const cs = gm.get(e.name) || []; const nn = cs.find(x => JSON.stringify(x) === JSON.stringify(e)) || cs[0]; if (nn) diff(`${w}[${e.name}]`, e, nn); }
-    const normG = (cs) => cs.map(x => x.detail ? { ...x, detail: Object.fromEntries(Object.entries(x.detail).map(([k, v]) => [k, Array.isArray(v) ? [...v].sort() : v])) } : x);
+    // a name list and its aligned <key>_hex (#40) are sorted TOGETHER, so a misaligned hex is a diff
+    const normDetail = (d) => {
+      const out = {};
+      for (const [k, v] of Object.entries(d)) {
+        if (k.endsWith("_hex") && k.slice(0, -4) in d) continue;
+        const hx = d[k + "_hex"];
+        if (Array.isArray(v) && Array.isArray(hx)) {
+          const pairs = v.map((n, i) => [n, hx[i]]).sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+          out[k] = pairs;
+        } else out[k] = Array.isArray(v) ? [...v].sort() : v;
+      }
+      return out;
+    };
+    const normG = (cs) => cs.map(x => x.detail ? { ...x, detail: normDetail(x.detail) } : x);
     cmpChecks(`${w}.checks`, normG(D.containerChecks(g)), normG(ng.checks));
 
     // four-reader decompression plan over the same gate
@@ -107,20 +124,22 @@ for (const [path, n] of Object.entries(native)) {
     diff(`${wx}.ok`, x.ok, nx.ok);
     if (!x.ok || !nx.ok) continue;
     for (const k of ["extract_native_libs", "target_sdk", "entry_count"]) diff(`${wx}.${k}`, x[k], nx[k]);
-    const byNameList = (xs) => [...xs].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    const nk = (a) => a.name + "|" + (a.name_hex ?? "");   // same-rendering twins: their hex decides
+    const byNameList = (xs) => [...xs].sort((a, b) => nk(a) < nk(b) ? -1 : nk(a) > nk(b) ? 1 : 0);
     const normX = (s) => ({ ...s, by_disposition: sortedObj(s.by_disposition), by_reader: sortedObj(s.by_reader) });
     diff(`${wx}.summary`, normX(x.summary), normX(nx.summary));
     const normXc = (cs) => cs.map(c => c.detail ? { ...c, detail: Object.fromEntries(Object.entries(c.detail).map(([k, v]) => [k, byNameList(v)])) } : c);
     cmpChecks(`${wx}.checks`, normXc(x.checks), normXc(nx.checks));
     const xm = byName(nx.entries);
     const pick = (nn, e) => Object.fromEntries(Object.keys(e).map(k => [k, nn[k]]));
-    for (const e of x.entries) { const cs = xm.get(e.name) || []; const nn = cs.find(c => JSON.stringify(pick(c, e)) === JSON.stringify(e)) || cs[0]; if (nn) diff(`${wx}[${e.name}]`, e, pick(nn, e)); }
+    for (const e of x.entries) { const cs = xm.get(e.name) || []; const nn = cs.find(c => JSON.stringify(pick(c, e)) === JSON.stringify(e)) || cs.find(c => c.name_hex === e.name_hex) || cs[0]; if (nn) diff(`${wx}[${e.name}]`, e, pick(nn, e)); }
     diff(`${wx}.keys`, Object.keys(x.entries[0] || {}).sort(), Object.keys(nx.entries[0] || {}).sort());
   }
 
   // device-faithful bytes, every entry, via its own mapped reader
-  for (const [name, ne] of Object.entries(n.extracted)) {
-    const r = m.extractEntry(VFS, name, 512 * 1024 * 1024);
+  for (const [name, ne] of Object.entries(n.extracted)) {   // "x:<name_hex>" | "s:<name>"
+    const key = name.startsWith("x:") ? Uint8Array.from(name.slice(2).match(/../g) || [], h => parseInt(h, 16)) : name.slice(2);
+    const r = m.extractEntry(VFS, key, 512 * 1024 * 1024);
     const we = r.ok ? { ok: true, disposition: r.disposition, size: r.data.length, sha256: createHash("sha256").update(r.data).digest("hex") } : { ok: false, error: r.error };
     diff(`extracted[${name}]`, we, ne);
   }

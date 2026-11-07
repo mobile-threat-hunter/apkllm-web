@@ -99,6 +99,20 @@ def main(out: Path):
         (b"\xef\xbb\xbfassets/a_long_enough_name.txt", b"long bom"),   # BOM, >16 bytes
         (b"assets/long_prefix_dir/\xc0\x80.so", b"x"),                 # overlong, >16 bytes
     ])
+    # #40: names that are not strict UTF-8 — twins that RENDER alike (only name_hex tells them apart),
+    # a literal U+FFFD sibling, each lossy shape libziparchive admits; > 20 mismatches for the sample
+    elf, gif = b"\x7fELF" + bytes(60), b"GIF89a" + bytes(30)
+    raw_zip(out / "lossy.apk", [
+        (b"AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20)),
+        (b"lib/arm64-v8a/\xc0\x81.so", elf), (b"lib/arm64-v8a/\xc1\x81.so", elf),   # twins
+        (b"lib/arm64-v8a/\xef\xbf\xbd\xef\xbf\xbd.so", elf),                        # literal U+FFFD x2
+        (b"lib/arm64-v8a/z\xed\xa0\x80.so", elf), (b"lib/arm64-v8a/z\xed\xb0\x80.so", elf),
+        (b"res/\xf5\x80\x80\x80.png", gif), (b"res/\xf6\x80\x80\x80.png", gif),
+        (b"res/\xf4\x90\x80\x80.png", gif),
+        (b"assets/\xf8\x88\x80\x80\x80.bin", b"x" * 40), (b"assets/\xfc\x84\x80\x80\x80\x80.bin", b"y" * 40),
+        (b"res/raw/\xe0\x80\x80.txt", b"hello"), (b"res/raw/\xe0\x81\x80.txt", b"world"),
+        *[(b"res/q%d\xc0\x80.jpg" % i, gif) for i in range(24)],
+    ])
     tail = build(out / "tail.apk", [
         ("t1.bin", b"A" * 510 + b"\xe2\x41" + b"B" * 100, zipfile.ZIP_STORED),       # invalid continuation → binary
         ("t2.bin", b"A" * 509 + b"\xf0\x9f\x41" + b"B" * 100, zipfile.ZIP_STORED),   # invalid continuation → binary

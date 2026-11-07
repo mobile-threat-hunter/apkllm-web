@@ -12,7 +12,7 @@
      built from and -N counts rebuilds against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "644c9e7-7";
+window.__APKLLM_BUILD = "779c17c-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -873,7 +873,7 @@ async function extractBundle(indices) {
     const c = r.counts, warn = [], info = [];
     if (c.reader_rejected) warn.push(`${c.reader_rejected} rejected by their strict reader`);
     if (c.md5_collisions) warn.push(`${c.md5_collisions} md5 collision${c.md5_collisions === 1 ? "" : "s"} ({md5}.{sha256}.bin)`);
-    if (c.name_unaddressable) warn.push(`${c.name_unaddressable} not addressable by name (invalid UTF-8 name)`);
+    if (c.name_unaddressable) warn.push(`${c.name_unaddressable} not reachable by their name (lookup missed)`);
     if (c.extract_failed) warn.push(`${c.extract_failed} failed to extract`);
     info.push(`${c.extracted} entr${c.extracted === 1 ? "y" : "ies"} extracted → ${c.files} {md5}.bin file${c.files === 1 ? "" : "s"}`);
     if (c.same_content) info.push(`${c.same_content} identical-content entr${c.same_content === 1 ? "y" : "ies"} share a file`);
@@ -986,19 +986,22 @@ function renderImages() {
     return;
   }
   const g = report.gate;
-  // names cross the binding as decoded text: two raw names that decode alike would make the
-  // by-name lookup return one entry's bytes for both (the worker's bundle/single refuse it too)
+  // entries are keyed by their raw name bytes (name_hex for a lossy name, #40): two names that
+  // merely render alike stay apart; a shared key (unreachable — libziparchive refuses duplicates)
+  // would be refused like the worker's bundle/single do
   const nameCount = new Map();
-  for (const e of c.entries) nameCount.set(e.name, (nameCount.get(e.name) ?? 0) + 1);
+  const keyOf = (e) => e.name_hex ? "x:" + e.name_hex : "s:" + e.name;   // raw bytes, not the rendering
+  for (const e of c.entries) nameCount.set(keyOf(e), (nameCount.get(keyOf(e)) ?? 0) + 1);
   c.entries.forEach((e, i) => {
     if (e.category !== "image") return;
     const ext = imgExtOf(e.name);
     // gate and content enumerate the same libziparchive order; fall back to a name match
-    const gi = g.ok && g.entries[i]?.name === e.name ? i : g.ok && nameCount.get(e.name) === 1 ? g.entries.findIndex(x => x.name === e.name) : -1;
+    const same = (x) => x.name === e.name && (x.name_hex ?? null) === (e.name_hex ?? null);
+    const gi = g.ok && g.entries[i] && same(g.entries[i]) ? i : g.ok && nameCount.get(keyOf(e)) === 1 ? g.entries.findIndex(same) : -1;
     const size = gi >= 0 ? g.entries[gi].uncompressed_size : null;
-    imgItems.push({ i, gi, name: e.name, ctype: e.content_type, ext, extMismatch: e.extension_mismatch,
+    imgItems.push({ i, gi, name: e.name, name_hex: e.name_hex ?? null, ctype: e.content_type, ext, extMismatch: e.extension_mismatch,
       size, mime: IMG_MIME[e.content_type] ?? null, read: null,
-      state: nameCount.get(e.name) > 1 ? "unaddressable"
+      state: nameCount.get(keyOf(e)) > 1 ? "unaddressable"
         : !IMG_MIME[e.content_type] ? "nodecode" : size > IMG_AUTO_MAX ? "large" : "idle" });
   });
   const types = {};
@@ -1038,15 +1041,14 @@ function renderImageGrid() {
     if (it.state === "idle") imgObserver.observe(el);
   }
 }
-// tab badge + note pills; re-run when a fetch reveals a state (an invalid-UTF-8 name is only
-// found unaddressable when its lookup misses)
+// tab badge + note pills; re-run when a fetch reveals a state (unaddressable = a lookup that missed)
 function imgSummary() {
   const n = $("#n-images"), count = (st) => imgItems.filter(it => it.state === st).length;
   const unaddr = count("unaddressable");
   n.textContent = imgItems.length;
   n.classList.remove("alert"); n.classList.toggle("warn", unaddr > 0);
   const notes = [];
-  if (unaddr) notes.push(`<span class="pill warn">${unaddr} not addressable by name (invalid UTF-8 / names decode alike)</span>`);
+  if (unaddr) notes.push(`<span class="pill warn">${unaddr} not reachable by their name (lookup missed)</span>`);
   const em = imgItems.filter(it => it.extMismatch === true).length;
   if (em) notes.push(`<span class="pill warn">${em} image${em === 1 ? "" : "s"} under a name that expects other content</span>`);
   if (!imgItems.length) notes.push('<span class="tiny">no entry is an image by magic</span>');
@@ -1058,7 +1060,7 @@ function imgPlaceholder(it) {
     case "idle": case "queued": case "loading": return '<span class="ph"><span class="spin"></span></span>';
     case "large": return `<span class="ph">${fmtSize(it.size)} — click to load</span>`;
     case "nodecode": return `<span class="ph">${esc(it.ctype)}<br>not renderable in a browser</span>`;
-    case "unaddressable": return '<span class="ph">another entry\'s name decodes the same — not addressable by name</span>';
+    case "unaddressable": return '<span class="ph">the lookup by this entry\'s name bytes missed</span>';
     case "decodefail": return `<span class="ph">${esc(it.ctype)} · ${it.w}×${it.h}<br>decode failed — click to retry</span>`;
     case "undecodable": return `<span class="ph bad">${esc(it.ctype)} magic, but the browser cannot decode it</span>`;
     case "huge": return `<span class="ph">${it.w}×${it.h} ≈ ${fmtMem(it.w * it.h * 4)} decoded<br>over the auto-decode limit — open to decode</span>`;
@@ -1196,7 +1198,7 @@ function pumpImages(run) {
     const k = run.queue.shift(), it = run.items[k];
     it.state = "loading"; run.busy++;
     imgObserver?.unobserve(imgTiles.get(k) ?? document.body);
-    wcall({ type: "extract", name: it.name }).then(r => {
+    wcall({ type: "extract", name: it.name, name_hex: it.name_hex }).then(r => {
       if (run !== imgRun || run.gen !== loadGen) return;   // another APK replaced this one
       if (!r.ok) { it.state = isUnaddressable(r.error) ? "unaddressable" : "err"; it.err = r.error; if (it.state === "unaddressable") imgSummary(); return; }
       it.read = r.disposition; it.size = r.data.length;
@@ -1238,7 +1240,7 @@ async function loadFull(k) {
   ivPending = true;
   const seq = ++ivSeq, run = imgRun, it = imgItems[k];
   try {
-    const r = await wcall({ type: "extract", name: it.name });
+    const r = await wcall({ type: "extract", name: it.name, name_hex: it.name_hex });
     if (seq !== ivSeq || run !== imgRun || run.gen !== loadGen || !r.ok) return;
     if (it.w * it.h > IMG_MAX_PIXELS) return;
     ivUrl = URL.createObjectURL(new Blob([r.data], { type: it.mime }));
@@ -1256,7 +1258,7 @@ async function forceDecode(k) {
   ivDecoding = true; paintViewerBody(k);
   const say = (html) => { const st = $("#iv-dstatus"); if (st && live()) setXStatus(html, st); };
   try {
-    const r = await wcall({ type: "extract", name: it.name });
+    const r = await wcall({ type: "extract", name: it.name, name_hex: it.name_hex });
     if (!live()) return;
     if (!r.ok) { say(`<span class="err">${esc(r.error)}</span>`); return; }
     await chainDecode(async () => {

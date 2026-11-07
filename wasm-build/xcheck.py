@@ -56,10 +56,12 @@ def extract_report(path, enl, tsdk, scope, page):
 
 
 def extracted(path, names):
-    """extract_entry per unique name: sha256 of the device-faithful bytes, or the error."""
+    """extract_entry per unique key — "x:<name_hex>" (the raw bytes of a lossy name, #40) or
+    "s:<name>": sha256 of the device-faithful bytes, or the error."""
     out = {}
     for n in dict.fromkeys(names):
-        r = core.extract_entry(path, n, 512 * 1024 * 1024)
+        key = bytes.fromhex(n[2:]) if n.startswith("x:") else n[2:]
+        r = core.extract_entry(path, key, 512 * 1024 * 1024)
         out[n] = (
             {"ok": True, "disposition": r["disposition"], "size": len(r["data"]),
              "sha256": hashlib.sha256(r["data"]).hexdigest()}
@@ -74,8 +76,11 @@ def main(out, apks):
         c = container.content_map(p)
         t = container.tamper_report(p)
         g0 = gate(p, None, None, None, 4096)
-        names = [e["name"] for e in g0["entries"]] if g0.get("ok") else [
-            e["name"] for e in (t.get("entries") or [])]
+        def key(e):
+            return "x:" + e["name_hex"] if e.get("name_hex") else "s:" + e["name"]
+
+        names = [key(e) for e in g0["entries"]] if g0.get("ok") else [
+            key(e) for e in (t.get("entries") or [])]
         res[p] = {
             "content": c,
             "tamper": t,
