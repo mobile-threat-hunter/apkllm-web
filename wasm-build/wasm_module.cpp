@@ -11,7 +11,8 @@
 // JS API (module-level functions, all return plain JS objects):
 //   installGate(path, extractNativeLibs: boolean|null, targetSdk: number|null,
 //               pageSize: number, arscScope: boolean|null)
-//   extractEntry(path, name, maxBytes)      // .data is a Uint8Array copy
+//   extractEntry(path, name, maxBytes)      // name: string, or Uint8Array of raw bytes (name_hex)
+//                                           // .data is a Uint8Array copy
 //   entryHeads(path, n)                     // each .head is a Uint8Array copy
 //   locateSigningBlock(path)
 //   tamperScan(path)
@@ -31,6 +32,8 @@
 //     here by a WHATWG TextDecoder("utf-8", {ignoreBOM:true}) — non-fatal
 //     replacement matches Python's errors="replace" byte-for-byte (verified in
 //     review on the overlong / surrogate / 5-byte / truncated cases).
+//   - A lossy name also carries name_hex (module.cpp's LossyHex, here StrictUtf8 — CPython's
+//     strict decoder); extractEntry takes those bytes back as a Uint8Array where Python takes bytes.
 
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
@@ -90,6 +93,43 @@ val SafeStr(const std::string& s) {
         return val::global("TextDecoder").new_(std::string("utf-8"), opts);
     }();
     return decoder.call<val>("decode", Bytes(s));
+}
+
+// Strict UTF-8 as CPython's decoder (errors="strict") judges it — Unicode Table 3-7 well-formed
+// sequences: no overlong, no surrogate (ED A0..BF), nothing above U+10FFFF, no 5/6-byte lead.
+bool StrictUtf8(const std::string& s) {
+    const auto* p = reinterpret_cast<const unsigned char*>(s.data());
+    size_t n = s.size(), i = 0;
+    auto cont = [&](size_t k, unsigned lo = 0x80, unsigned hi = 0xBF) {
+        return k < n && p[k] >= lo && p[k] <= hi;
+    };
+    while (i < n) {
+        unsigned c = p[i];
+        if (c < 0x80) { i += 1; continue; }
+        if (c >= 0xC2 && c <= 0xDF && cont(i + 1)) { i += 2; continue; }
+        if (c == 0xE0 && cont(i + 1, 0xA0) && cont(i + 2)) { i += 3; continue; }
+        if (((c >= 0xE1 && c <= 0xEC) || c == 0xEE || c == 0xEF) && cont(i + 1) && cont(i + 2)) { i += 3; continue; }
+        if (c == 0xED && cont(i + 1, 0x80, 0x9F) && cont(i + 2)) { i += 3; continue; }
+        if (c == 0xF0 && cont(i + 1, 0x90) && cont(i + 2) && cont(i + 3)) { i += 4; continue; }
+        if (c >= 0xF1 && c <= 0xF3 && cont(i + 1) && cont(i + 2) && cont(i + 3)) { i += 4; continue; }
+        if (c == 0xF4 && cont(i + 1, 0x80, 0x8F) && cont(i + 2) && cont(i + 3)) { i += 4; continue; }
+        return false;
+    }
+    return true;
+}
+
+// module.cpp's LossyHex (#24): the raw name bytes in lowercase hex when the decoded name is lossy
+// (not strict UTF-8), else null — the key extractEntry takes back as a Uint8Array.
+val NameHex(const std::string& s) {
+    if (StrictUtf8(s)) return val::null();
+    static const char kHex[] = "0123456789abcdef";
+    std::string h;
+    h.reserve(s.size() * 2);
+    for (unsigned char c : s) {
+        h.push_back(kHex[c >> 4]);
+        h.push_back(kHex[c & 0xF]);
+    }
+    return val(h);
 }
 
 val Strings(const std::vector<std::string>& v) {
@@ -175,6 +215,7 @@ val InstallGate(const std::string& path, val extract_native_libs, val target_sdk
         const auto& v = g.verdicts[i];
         val d = val::object();
         d.set("name", SafeStr(e.name));
+        d.set("name_hex", NameHex(e.name));
         d.set("class", std::string(ClassName(e.klass)));
         d.set("primary_multidex", e.primary_multidex);
         d.set("method", e.method);
@@ -203,12 +244,27 @@ val InstallGate(const std::string& path, val extract_native_libs, val target_sdk
 }
 
 // Extract ONE entry's device-faithful bytes (the four-reader model). Bytes only.
-val ExtractEntry(const std::string& path, const std::string& name, double max_bytes) {
+// `name` is a JS string (encoded UTF-8 — a strict-UTF-8 name) or a Uint8Array of the raw name
+// bytes (an entry whose name_hex is set: a JS string cannot carry its bytes). The C++ core
+// matches byte for byte either way, as module.cpp does for Python str / bytes.
+val ExtractEntry(const std::string& path, val name, double max_bytes) {
     val out = val::object();
     uint64_t cap = max_bytes > 0 ? static_cast<uint64_t>(max_bytes) : 0;
-    apkllm::ExtractedEntry e = apkllm::ExtractEntry(path, name, cap);
+    std::string key;
+    if (name.typeOf().as<std::string>() == "string") {
+        key = name.as<std::string>();
+    } else if (name.instanceof(val::global("Uint8Array"))) {
+        std::vector<uint8_t> raw = emscripten::convertJSArrayToNumberVector<uint8_t>(name);
+        key.assign(raw.begin(), raw.end());
+    } else {
+        out.set("ok", false);
+        out.set("error", std::string("extractEntry: name must be a string or a Uint8Array"));
+        return out;
+    }
+    apkllm::ExtractedEntry e = apkllm::ExtractEntry(path, key, cap);
     out.set("ok", e.ok);
     out.set("name", SafeStr(e.name));
+    out.set("name_hex", NameHex(e.name));
     out.set("class", std::string(ClassName(e.klass)));
     out.set("method", e.method);
     out.set("diverges", e.diverges);
@@ -236,6 +292,7 @@ val EntryHeads(const std::string& path, double n) {
     for (const auto& h : r.entries) {
         val d = val::object();
         d.set("name", SafeStr(h.name));
+        d.set("name_hex", NameHex(h.name));
         d.set("class", std::string(ClassName(h.klass)));
         d.set("method", h.method);
         d.set("gpbf", h.gpbf);
@@ -322,6 +379,7 @@ val TamperScan(const std::string& path) {
     for (const auto& e : r.entries) {
         val d = val::object();
         d.set("name", SafeStr(e.name));
+        d.set("name_hex", NameHex(e.name));
         d.set("cd_record_offset", Num(e.cd_record_offset));
         d.set("cd_method", e.cd_method);
         d.set("cd_gpbf", e.cd_gpbf);
@@ -346,6 +404,7 @@ val TamperScan(const std::string& path) {
         val d = val::object();
         d.set("id", f.id);
         d.set("entry", SafeStr(f.entry));
+        d.set("entry_hex", NameHex(f.entry));
         d.set("severity", f.severity);
         d.set("detail", SafeStr(f.detail));
         findings.set(i++, d);

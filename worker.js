@@ -14,7 +14,7 @@
 //                                         pageSize: number, arscScope: bool|null }
 //                      → installGate(...) + checks[]      (re-run whenever the user changes an input)
 //                      (result.extract = the four-reader decompression plan over it)
-//                  { id, type: "extract", name: string }
+//                  { id, type: "extract", name: string, name_hex: string|null }
 //                      → extractEntry(...) with .data transferred
 //                  { id, type: "bundle",  indices: number[] (into the gate's entries), source: {name,size}, params: <gate params> }
 //                      → { blob, counts, total, input_md5 }  — every named entry through
@@ -108,9 +108,17 @@ function gate(p) {
 }
 
 const MAX_ENTRY = 512 * 1024 * 1024;   // same cap as apkllm.container.extract_entry
-function extract(name) {
+// An entry's lookup key: its raw name bytes when name_hex is set (a lossy name — the JS string is
+// U+FFFD-replaced and would match nothing, #40), else the string (strict UTF-8, encoded exactly).
+function nameKey(name, nameHex) {
+  if (!nameHex) return name;
+  const b = new Uint8Array(nameHex.length / 2);
+  for (let k = 0; k < b.length; k++) b[k] = parseInt(nameHex.substr(2 * k, 2), 16);
+  return b;
+}
+function extract(name, nameHex) {
   if (!loaded) throw new Error("no APK loaded");
-  return Module.extractEntry(VFS, name, MAX_ENTRY);
+  return Module.extractEntry(VFS, nameKey(name, nameHex), MAX_ENTRY);
 }
 
 // ── bulk extraction → one zip ───────────────────────────────────────────
@@ -257,11 +265,9 @@ async function sha256hex(data) {
 }
 
 // Why an entry produced no file — kept apart so a demo limit is never shown as a device verdict:
-//   name_unaddressable the entry cannot be looked up by its name: names cross the binding
-//                     as U+FFFD-replaced text (apkllm's string API, native Python alike), so
-//                     an invalid-UTF-8 name misses (FindEntry: Entry not found), and two raw
-//                     names that decode alike cannot be told apart — the device reader is
-//                     never consulted
+//   name_unaddressable the lookup missed (FindEntry: Entry not found). A lossy name is looked up
+//                     by its raw bytes (name_hex, #40), so this no longer follows from the name
+//                     alone; it is kept for a lookup that still misses
 //   reader_rejected   its mapped STRICT reader rejects it (forged method ∉ {0,8}) — the
 //                     device would not load it either; no faithful bytes exist
 //   extract_failed    anything else: apkllm's own guards (512 MiB cap, implausible deflate
@@ -281,7 +287,7 @@ const RULE = "each entry is materialized only by its own mapped device reader (f
   "NativeLibraryHelper / ART.DexFileLoader strict, AssetManager lenient, libziparchive generic strict); " +
   "read = stored | inflate | lenient_stored. ok=false entries have no file and a failure cause: " +
   "reader_rejected (its strict reader rejects a forged method — the device would not load it), " +
-  "name_unaddressable (the entry name is not valid UTF-8 or decodes like another entry's, so the by-name lookup cannot reach it — not a reader verdict), " +
+  "name_unaddressable (the lookup missed — not a reader verdict; a name that is not valid UTF-8 is looked up by its raw bytes, name_hex), " +
   "extract_failed (apkllm's own guards or a corrupt stream — see error)";
 const NAMING = "apkllm naming: a file is {md5}.bin of its CONTENT (never the entry name); identical content is one file; " +
   "an md5 collision ⇒ {md5}.{sha256}.bin; entries[].name → entries[].file is the mapping";
@@ -295,29 +301,32 @@ const reportHead = (g, msg) => ({
 // One gate entry through its own reader → a report row (+ the bytes when delivered).
 async function extractRow(plan, i, nameCount) {
   const p = plan[i], name = p.name;
-  const row = { index: i, name, class: p.class, reader: p.reader, method: p.method,
+  const row = { index: i, name, name_hex: p.name_hex ?? null, class: p.class, reader: p.reader, method: p.method,
                 plan_disposition: p.disposition, device_loads: p.device_loads };
-  if (nameCount.get(name) > 1) {
+  if (nameCount.get(keyOf(p)) > 1) {
     row.ok = false; row.failure = "name_unaddressable";
-    row.error = `${nameCount.get(name)} entries decode to this same name — a by-name lookup cannot tell which one it returns`;
+    row.error = `${nameCount.get(keyOf(p))} entries share these exact name bytes — a lookup cannot tell which one it returns`;
     return { row };
   }
-  const r = Module.extractEntry(VFS, name, MAX_ENTRY);
+  const r = Module.extractEntry(VFS, nameKey(name, p.name_hex), MAX_ENTRY);
   if (!r.ok) { row.ok = false; row.failure = failureCause(r.error); row.error = r.error; return { row }; }
   row.ok = true; row.read = r.disposition; row.size = r.data.length;
   if (name.endsWith("/") && r.data.length === 0) { row.kind = "directory"; row.file = null; return { row }; }
   row.kind = "file"; row.md5 = md5hex(r.data); row.sha256 = await sha256hex(r.data);
   return { row, data: r.data };
 }
-const nameCounts = (plan) => { const m = new Map(); for (const e of plan) m.set(e.name, (m.get(e.name) ?? 0) + 1); return m; };
+// One key per distinct raw name: the hex for a lossy name, the string otherwise (two entries can
+// share a rendering, never their bytes — libziparchive refuses a duplicate name at open).
+const keyOf = (e) => e.name_hex ? "x:" + e.name_hex : "s:" + e.name;
+const nameCounts = (plan) => { const m = new Map(); for (const e of plan) m.set(keyOf(e), (m.get(keyOf(e)) ?? 0) + 1); return m; };
 
 async function bundle(msg, progress, myCancel) {
   if (!loaded) throw new Error("no APK loaded");
   const g = gate(msg.params || {});
   if (!g.ok) throw new Error("libziparchive refused to open the container: " + g.error);
   // msg.indices index the gate's entry list (its order does not depend on the manifest inputs).
-  // One report row per gate entry: names arrive as decoded text, so two raw names that decode
-  // alike would otherwise fold into one row (libziparchive itself refuses a true CD duplicate).
+  // One report row per gate entry: rows are keyed by raw name bytes (name_hex, #40), so two names
+  // that render alike stay two rows (libziparchive itself refuses a true CD duplicate).
   const plan = g.extract.entries;
   // archive order: of two different contents sharing an md5, the one met first gets {md5}.bin —
   // the same rule single() applies, so a file has one name however it was downloaded
@@ -371,7 +380,7 @@ async function single(msg) {
   const { row, data } = await extractRow(plan, i, nc);
   if (!row.ok || row.kind === "directory") return { ok: false, entry: row };
   const size = g.entries[i].uncompressed_size;
-  const sibs = plan.map((_, k) => k).filter(k => k !== i && g.entries[k].uncompressed_size === size && plan[k].deliverable && nc.get(plan[k].name) === 1);
+  const sibs = plan.map((_, k) => k).filter(k => k !== i && g.entries[k].uncompressed_size === size && plan[k].deliverable && nc.get(keyOf(plan[k])) === 1);
   const same = [row];                 // entries with this exact content (md5 AND sha256)
   const firstOf = new Map([[row.sha256, i]]);   // sha256 → first index, for contents sharing this md5
   let checked = sibs.length <= SIBLING_MAX && sibs.length * size <= SIBLING_BYTES;
@@ -420,7 +429,7 @@ async function handle(e, cancelAt) {
     if (type === "load") result = await load(e.data.bytes);
     else if (type === "gate") result = gate(e.data);
     else if (type === "extract") {
-      result = extract(e.data.name);
+      result = extract(e.data.name, e.data.name_hex);
       if (result.ok && result.data) transfer = [result.data.buffer];
     }
     else if (type === "single") result = await single(e.data);

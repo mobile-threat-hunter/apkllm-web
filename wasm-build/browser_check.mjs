@@ -163,8 +163,8 @@ try {
           if (!d) { fail(`${JSON.stringify(e.name)} → ${e.file} not in the zip`); break; }
           if (md5(d) !== e.md5 || sha256(d) !== e.sha256 || d.length !== e.size) { fail(`${JSON.stringify(e.name)} hashes/size ≠ its file`); break; }
         }
-        // four-reader rule: reader_rejected is exactly the plan's undeliverable set, minus entries
-        // the by-name lookup never reaches (name_unaddressable takes precedence)
+        // four-reader rule: reader_rejected is exactly the plan's undeliverable set, minus any entry
+        // whose lookup still missed (name_unaddressable takes precedence)
         const unaddr = new Set(rep.entries.filter(e => e.failure === "name_unaddressable").map(e => e.index));
         const sorted = (xs) => JSON.stringify([...xs].sort());
         if (sorted(rep.entries.filter(e => e.failure === "reader_rejected").map(e => e.name)) !== sorted(xs.plan.filter((e, i) => !e.deliverable && !unaddr.has(i)).map(e => e.name)))
@@ -290,9 +290,8 @@ try {
       if (!/^[0-9a-f]{32}(\.[0-9a-f]{64})?\.zip$/.test(dc.okName)) fail("single download is not {md5}[.{sha256}].zip: " + dc.okName);
     }
     if (dc.rejectedNoDownload === false) fail("a reader-rejected row downloaded something");
-    // an undeliverable entry whose NAME cannot be looked up (invalid UTF-8) reports that miss instead
-    // the reason must be the reader's — unless the NAME itself cannot be looked up (U+FFFD-decoded)
-    if (dc.rejectedStatus !== undefined && !(/\uFFFD/.test(dc.rejectedName) ? /FindEntry: Entry not found|decode to this same name/ : /strict reader rejects/).test(dc.rejectedStatus)) fail("rejected row did not report its reason: " + dc.rejectedStatus);
+    // the reason must be the reader's — a lossy name is looked up by its raw bytes (name_hex, #40)
+    if (dc.rejectedStatus !== undefined && !/strict reader rejects/.test(dc.rejectedStatus)) fail("rejected row did not report its reason: " + dc.rejectedStatus);
     if (dc.crBytes === false) fail("gate bytes button lost a CR-named entry");
     if (dc.staleDropped === false) fail("an extract that finished after a new load still downloaded");
     if (dc.alerts?.length) fail("unexpected alert: " + dc.alerts.join(" | "));

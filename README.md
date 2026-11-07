@@ -47,9 +47,9 @@ maps every entry name → file.
   the original name, `file`, md5, sha256, size, class, reader, planned disposition and what
   the reader actually did (`stored` / `inflate` / `lenient_stored`) — or `ok: false` with a
   failure cause and the engine's error: `reader_rejected` (its strict reader rejects a forged
-  method; the device would not load it either), `name_unaddressable` (an entry name that is
-  not valid UTF-8, or that decodes like another entry's — names cross apkllm's binding as
-  U+FFFD-replaced text, so the by-name lookup cannot reach it; native Python behaves the same)
+  method; the device would not load it either), `name_unaddressable` (the lookup missed — an
+  entry name that is not valid UTF-8 is shown U+FFFD-replaced and looked up by its raw bytes,
+  `name_hex`, as native apkllm does since #24 / #40, so this no longer follows from the name)
   or `extract_failed` (apkllm's own guards — 512 MiB per entry, implausible deflate expansion —
   or a corrupt stream). Directory entries (`res/`) are listed, with no file.
 - **One entry** (`bytes`, or double-click its row) → `{md5}.zip` = `{md5}.bin` + `{md5}.json`,
