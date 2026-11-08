@@ -446,6 +446,9 @@ const byRawName = (es) => es.map(e => [rawKey(e), e]).sort((a, b) => a[0] < b[0]
 // not UTF-16 units — Python's len / slice — so an astral character never splits differently.
 const SHOWN = 128;
 const cut = (t) => { const cp = Array.from(t); return cp.length > SHOWN ? cp.slice(0, SHOWN).join("") + "…" : t; };
+// container._DETAIL_SHOWN / _cut_detail: a kept tamper finding's detail (quotes the name) keeps head + "…" + tail
+const DETAIL_SHOWN = 512;
+const cutDetail = (t) => { const cp = Array.from(t); if (cp.length <= DETAIL_SHOWN) return t; const h = DETAIL_SHOWN >> 1; return cp.slice(0, h).join("") + "\u2026" + cp.slice(cp.length - (DETAIL_SHOWN - 1 - h)).join(""); };
 const shown = (name, hex) => hex ? cut(name) : name;
 const item = (e, extra) => ({ name: shown(e.name, e.name_hex), name_hex: e.name_hex, ...extra });
 
@@ -549,7 +552,7 @@ function tamperChecks(r) {
         : `${tamper.length} tampering + ${suspicious.length} suspicious present-vs-consumed divergence(s): ` + keptFindings(significant).map(f => `${f.id}(${f.entry ? cut(f.entry) : "file"})`).join("; ")
           + (significant.length > DETAIL_CAP ? ` (+${significant.length - DETAIL_CAP} more not shown)` : ""),
       findings.length ? { ...capped("findings", findings),
-        findings: keptFindings(findings).map(f => ({ ...f, entry: shown(f.entry, f.entry_hex) })), by_id: byId } : null),
+        findings: keptFindings(findings).map(f => ({ ...f, entry: shown(f.entry, f.entry_hex), detail: cutDetail(f.detail) })), by_id: byId } : null),
   ];
 }
 

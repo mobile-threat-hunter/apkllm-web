@@ -26,6 +26,7 @@ const EXPECT_FINDINGS = {
   readers: ["cd_lfh_method_mismatch", "method_forgery"],
   many: ["cd_lfh_method_mismatch", "method_forgery"],
   bury: ["duplicate_entry_name", "method_forgery"],
+  lfhlong: ["lfh_name_mismatch"],
 };
 // Four-reader rule on readers.apk: exactly the forged entries whose mapped reader is STRICT
 // fail extractEntry; the AssetManager ones are read raw (lenient_stored).
@@ -33,7 +34,7 @@ const EXPECT_EXTRACT = {
   readers: { rejected: ["META-INF/F.SF", "classes3.dex", "data.bin", "lib/arm64-v8a/libf.so"],
              lenient: ["assets/f.bin", "res/raw/f.bin"] },
 };
-const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true, readers: true, many: true, bury: false };
+const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true, readers: true, many: true, bury: false, lfhlong: false };
 
 const m = await createApkllm();
 console.log("engine loaded; SCHEME_V2 =", m.SCHEME_V2.toString(16));

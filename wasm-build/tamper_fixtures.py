@@ -157,6 +157,20 @@ def main(out: Path):
         (b"AndroidManifest.xml", b"REAL"), (b"AndroidManifest.xml", b"EVIL"),
     ])
     forge_cd_methods(bury, (b"assets/",), 99)
+    # #49: a kept finding's detail quotes the names (lfh_name_mismatch: both) and is cut to 512 code
+    # points, head + "…" + tail. 700-byte names, strict and lossy, the LFH copy's last byte changed;
+    # "the local-file-header name ('" (29) + "assets/" (7) + 219 'a' puts an astral char at code
+    # point 255, the last one the head keeps (a UTF-16-unit cut would split it)
+    lfh = [b"assets/" + b"a" * 219 + b"\xf0\x9f\x98\x80" + b"%02d" % i + b"a" * 470 for i in range(12)]
+    lfh += [b"assets/" + b"\xc0\xaf" * 340 + b"%02d" % i for i in range(12)]
+    lfhlong = raw_zip(out / "lfhlong.apk", [(nm, b"x") for nm in lfh])
+    d = bytearray(lfhlong.read_bytes())
+    i = d.find(b"PK\x03\x04")
+    while i >= 0:
+        ln = struct.unpack_from("<H", d, i + 26)[0]
+        d[i + 30 + ln - 1] ^= 1
+        i = d.find(b"PK\x03\x04", i + 30 + ln + 1)
+    lfhlong.write_bytes(bytes(d))
     tail = build(out / "tail.apk", [
         ("t1.bin", b"A" * 510 + b"\xe2\x41" + b"B" * 100, zipfile.ZIP_STORED),       # invalid continuation → binary
         ("t2.bin", b"A" * 509 + b"\xf0\x9f\x41" + b"B" * 100, zipfile.ZIP_STORED),   # invalid continuation → binary

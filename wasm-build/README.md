@@ -70,7 +70,7 @@ device-faithful bytes, or the identical rejection error).
   twins, a DOS device stem, a 300-byte segment, tab / newline / CR / leading-quote / formula)
   for the md5-named downloads and the copy TSV; `lossy` / `lossydup` (#40: names that are not
   strict UTF-8), and `many` (#49: > 20 items in every check `detail` list — the cap, `<key>_count` /
-  `_cut` and the kept items, in raw-name byte order on both sides). `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
+  `_cut` and the kept items, in raw-name byte order on both sides), `bury` (a Master-Key duplicate after 21 per-entry findings) and `lfhlong` (a kept finding's `detail` quoting 700-byte names, cut head + `…` + tail at 512 code points, an astral char at the head's last code point). `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
 - `xcheck.py` / `xcheck.mjs` — native-vs-wasm field-by-field comparison (above).
 - `browser_check.mjs` — serves the repo root, drives `index.html` over CDP, feeds an
   APK through the file input and asserts every panel rendered; on the Extract tab it runs
