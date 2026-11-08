@@ -8,11 +8,12 @@
 <!-- The build pin cache-busts apkllm.js / apkllm.wasm / worker.js / domain.js AS A
      SET: a returning visitor whose browser kept an old apkllm.js but pulls a new
      apkllm.wasm gets an ABI mismatch and "engine load failed". Bump on EVERY wasm
-     rebuild (wasm-build/README.md). The base is the apkllm commit the engine was
-     built from and -N counts rebuilds against it. Defined ONCE here; every other
+     rebuild (wasm-build/README.md) and every worker.js / domain.js change (a kept old
+     domain.js would mirror old Python policy). The base is the apkllm commit the engine
+     was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "779c17c-1";
+window.__APKLLM_BUILD = "779c17c-2";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";

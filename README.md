@@ -71,4 +71,5 @@ Out of scope: signature verification (Java apksig in apkllm) and unwrap (Python)
 See [`wasm-build/README.md`](wasm-build/README.md): `emcmake cmake` + `ninja`, then
 `smoke.mjs` (node), `xcheck.{py,mjs}` (every number vs the native Python binding on the
 same APKs) and `browser_check.mjs` (the page itself in headless Chrome). After a rebuild
-copy `build/apkllm.{js,wasm}` here and bump `window.__APKLLM_BUILD` in `index.html`.
+copy `build/apkllm.{js,wasm}` here and bump `window.__APKLLM_BUILD` in `index.html` (also after
+any `worker.js` / `domain.js` change: the pin cache-busts all four as a set).

@@ -24,6 +24,8 @@ const EXPECT_FINDINGS = {
   janus: ["janus", "cd_entry_count_mismatch"],
   cdforge: ["cd_lfh_method_mismatch", "method_forgery"],
   readers: ["cd_lfh_method_mismatch", "method_forgery"],
+  many: ["cd_lfh_method_mismatch", "method_forgery"],
+  bury: ["duplicate_entry_name", "method_forgery"],
 };
 // Four-reader rule on readers.apk: exactly the forged entries whose mapped reader is STRICT
 // fail extractEntry; the AssetManager ones are read raw (lenient_stored).
@@ -31,7 +33,7 @@ const EXPECT_EXTRACT = {
   readers: { rejected: ["META-INF/F.SF", "classes3.dex", "data.bin", "lib/arm64-v8a/libf.so"],
              lenient: ["assets/f.bin", "res/raw/f.bin"] },
 };
-const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true, readers: true };
+const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true, readers: true, many: true, bury: false };
 
 const m = await createApkllm();
 console.log("engine loaded; SCHEME_V2 =", m.SCHEME_V2.toString(16));
@@ -76,7 +78,7 @@ for (const path of TESTS) {
   if (heads.ok !== gate.ok) fail(`entryHeads ok=${heads.ok} but installGate ok=${gate.ok}`);
   if (heads.ok) {
     if (heads.entries.length !== gate.entry_count) fail("entryHeads count != installGate count");
-    const dexHead = heads.entries.find(e => e.class === "dex");
+    const dexHead = heads.entries.find(e => e.class === "dex" && e.method_known !== false && e.disposition !== "rejected");
     if (dexHead) {
       const magic = Buffer.from(dexHead.head.subarray(0, 4)).toString("latin1");
       console.log("  dex head magic:", JSON.stringify(magic), "disposition=", dexHead.disposition, "complete=", dexHead.complete);
@@ -86,7 +88,8 @@ for (const path of TESTS) {
   }
 
   if (gate.ok) {
-    const dex = gate.entries.find(e => e.class === "dex");
+    // a deliverable dex extracts (a forged-method dex is the strict reader's reject: EXPECT_EXTRACT)
+    const dex = gate.entries.find(e => e.class === "dex" && e.method_known);
     if (dex) {
       const ex = m.extractEntry(VFS, dex.name, 512 * 1024 * 1024);
       console.log("  extractEntry", dex.name, "ok=", ex.ok, ex.ok ? `disposition=${ex.disposition} bytes=${ex.data.length}` : `error=${ex.error}`);

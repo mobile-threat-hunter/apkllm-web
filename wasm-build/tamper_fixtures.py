@@ -15,6 +15,8 @@ No apkllm import. Shapes:
                names on both sides of emscripten's 16-byte decoder split (ADV-3)
   tail.apk     >512-byte 'unknown' entries whose 512-byte head is cut inside a UTF-8
                sequence: valid-incomplete (text) vs invalid continuation (binary) (ADV-5)
+  many.apk     > 20 items in every check detail list, mixed name families, long lossy names (#49)
+  bury.apk     a Master-Key duplicate after 21 per-entry findings (#49)
   readers.apk  every one of the four device readers, STORED / DEFLATED, plus a CD method
                forged to 99 per reader (strict readers reject, AssetManager reads raw)
                and the bundle's path cases: "../", a directory entry, a case-only twin,
@@ -78,6 +80,18 @@ def forge_cd_method(path: Path, name: str, method: int):
     path.write_bytes(raw)
 
 
+def forge_cd_methods(path: Path, prefixes, method: int):
+    """forge_cd_method for every entry whose RAW name starts with one of ``prefixes``."""
+    raw = bytearray(path.read_bytes())
+    i = raw.find(b"PK\x01\x02")
+    while i >= 0:
+        nlen = struct.unpack_from("<H", raw, i + 28)[0]
+        if bytes(raw[i + 46 : i + 46 + nlen]).startswith(tuple(prefixes)):
+            struct.pack_into("<H", raw, i + 10, method)
+        i = raw.find(b"PK\x01\x02", i + 4)
+    path.write_bytes(raw)
+
+
 def main(out: Path):
     out.mkdir(parents=True, exist_ok=True)
     dup = build(out / "dup.apk", [("AndroidManifest.xml", b"REAL", zipfile.ZIP_STORED),
@@ -118,6 +132,31 @@ def main(out: Path):
         (b"AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20)),
         (b"assets/\xc0\x81.bin", b"first"), (b"assets/\xc0\x81.bin", b"second"),
     ])
+    # #49: > 20 items in every check detail list. Three name families whose raw-byte order
+    # (A < C0 < E4) differs from their UTF-16/str order (A < U+4E00 < U+FFFD), so the kept 20
+    # (raw-name order on both sides) mix strict and lossy names; STORED unaligned native libs (the
+    # extractNativeLibs=false gate) and dex with the CD method forged to 99 (dex_gate /
+    # method_forgery / all_deliverable / tamper findings); ELF-in-.png assets (content sample);
+    # 300-byte lossy names (> 128 code points: the cut rendering, an astral char at the cut)
+    fam = [(b"A", 10), (b"\xc0\xaf", 8), (b"\xe4\xb8\x80", 8)]
+    names = lambda pre, suf: [pre + m + b"%02d" % i + suf for m, n in fam for i in range(n)]
+    many = raw_zip(out / "many.apk", [
+        (b"AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20)),
+        *[(nm, elf + bytes([i])) for i, nm in enumerate(names(b"lib/x86/lib", b".so"))],
+        # "lib/x86/lib" (11) + 116 U+FFFD puts an astral char at code point 127: the 128-cut keeps it
+        # whole (a UTF-16-unit cut would split its surrogate pair)
+        *[(b"lib/x86/lib" + b"\xc0\xaf" * 58 + b"\xf0\x9f\x98\x80" * 2 + b"%d.so" % i, elf) for i in range(2)],
+        *[(b"classes%d.dex" % (i + 2), DEX_MAGIC + bytes([i])) for i in range(26)],
+        *[(nm, elf) for nm in names(b"assets/", b".png")],
+    ])
+    forge_cd_methods(many, (b"lib/", b"classes"), 99)
+    # #49: 21 per-entry findings walked first, then a Master-Key duplicate (file-level, tamper):
+    # the check keeps the most severe first, one finding per id before any second
+    bury = raw_zip(out / "bury.apk", [
+        *[(b"assets/d%02d" % i, b"0123456789") for i in range(21)],
+        (b"AndroidManifest.xml", b"REAL"), (b"AndroidManifest.xml", b"EVIL"),
+    ])
+    forge_cd_methods(bury, (b"assets/",), 99)
     tail = build(out / "tail.apk", [
         ("t1.bin", b"A" * 510 + b"\xe2\x41" + b"B" * 100, zipfile.ZIP_STORED),       # invalid continuation → binary
         ("t2.bin", b"A" * 509 + b"\xf0\x9f\x41" + b"B" * 100, zipfile.ZIP_STORED),   # invalid continuation → binary

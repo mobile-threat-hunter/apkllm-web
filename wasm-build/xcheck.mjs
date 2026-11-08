@@ -66,13 +66,9 @@ for (const [path, n] of Object.entries(native)) {
     const normSum = (s) => ({ ...s, by_content_type: sortedObj(s.by_content_type), by_category: sortedObj(s.by_category), unknown_by_kind: sortedObj(s.unknown_by_kind) });
     const sumW = normSum(c.summary), sumN = normSum(n.content.summary);
     diff("content.summary", sumW, sumN);
-    // check detail.sample is the FIRST 20 in iteration order (murmur2 on wasm32 vs CityHash on
-    // x86-64): compare it as a (name, name_hex)-sorted list when it holds every mismatch, else only
-    // its length (the two sides may pick different 20 of more)
-    const rowKey = (a) => a.name + "|" + (a.name_hex ?? "");
-    const byKey = (xs) => [...xs].sort((a, b) => rowKey(a) < rowKey(b) ? -1 : rowKey(a) > rowKey(b) ? 1 : 0);
-    const normChecks = (cs) => cs.map(x => x.detail?.sample ? { ...x, detail: { ...x.detail, sample: x.detail.count > 20 ? x.detail.sample.length : byKey(x.detail.sample) } } : x);
-    cmpChecks("content.checks", normChecks(c.checks), normChecks(n.content.checks));
+    // check detail.sample: the first 20 in raw-name byte order on both sides (#49) — compared in
+    // order (libziparchive's own iteration is murmur2 on wasm32 vs CityHash on x86-64)
+    cmpChecks("content.checks", c.checks, n.content.checks);
     const nm = byName(n.content.entries);
     diff("content.names", [...byName(c.entries).keys()].sort(), [...nm.keys()].sort());
     // names that decode alike (U+FFFD) have several candidates: compare against the closest one
@@ -103,33 +99,17 @@ for (const [path, n] of Object.entries(native)) {
     const gm = byName(ng.entries);
     diff(`${w}.names`, [...byName(g.entries).keys()].sort(), [...gm.keys()].sort());
     for (const e of g.entries) { const cs = gm.get(e.name) || []; const nn = cs.find(x => JSON.stringify(x) === JSON.stringify(e)) || cs[0]; if (nn) diff(`${w}[${e.name}]`, e, nn); }
-    // a name list and its aligned <key>_hex (#40) are sorted TOGETHER, so a misaligned hex is a diff
-    const normDetail = (d) => {
-      const out = {};
-      for (const [k, v] of Object.entries(d)) {
-        if (k.endsWith("_hex") && k.slice(0, -4) in d) continue;
-        const hx = d[k + "_hex"];
-        if (Array.isArray(v) && Array.isArray(hx)) {
-          const pairs = v.map((n, i) => [n, hx[i]]).sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
-          out[k] = pairs;
-        } else out[k] = Array.isArray(v) ? [...v].sort() : v;
-      }
-      return out;
-    };
-    const normG = (cs) => cs.map(x => x.detail ? { ...x, detail: normDetail(x.detail) } : x);
-    cmpChecks(`${w}.checks`, normG(D.containerChecks(g)), normG(ng.checks));
+    // detail lists are in raw-name byte order on both sides (#49): compared as is, order included
+    cmpChecks(`${w}.checks`, D.containerChecks(g), ng.checks);
 
     // four-reader decompression plan over the same gate
     const nx = n.extract_report[key], x = D.extractReport(g), wx = `extract[${key}]`;
     diff(`${wx}.ok`, x.ok, nx.ok);
     if (!x.ok || !nx.ok) continue;
     for (const k of ["extract_native_libs", "target_sdk", "entry_count"]) diff(`${wx}.${k}`, x[k], nx[k]);
-    const nk = (a) => a.name + "|" + (a.name_hex ?? "");   // same-rendering twins: their hex decides
-    const byNameList = (xs) => [...xs].sort((a, b) => nk(a) < nk(b) ? -1 : nk(a) > nk(b) ? 1 : 0);
     const normX = (s) => ({ ...s, by_disposition: sortedObj(s.by_disposition), by_reader: sortedObj(s.by_reader) });
     diff(`${wx}.summary`, normX(x.summary), normX(nx.summary));
-    const normXc = (cs) => cs.map(c => c.detail ? { ...c, detail: Object.fromEntries(Object.entries(c.detail).map(([k, v]) => [k, byNameList(v)])) } : c);
-    cmpChecks(`${wx}.checks`, normXc(x.checks), normXc(nx.checks));
+    cmpChecks(`${wx}.checks`, x.checks, nx.checks);   // raw-name order on both sides (#49)
     const xm = byName(nx.entries);
     const pick = (nn, e) => Object.fromEntries(Object.keys(e).map(k => [k, nn[k]]));
     for (const e of x.entries) { const cs = xm.get(e.name) || []; const nn = cs.find(c => JSON.stringify(pick(c, e)) === JSON.stringify(e)) || cs.find(c => c.name_hex === e.name_hex) || cs[0]; if (nn) diff(`${wx}[${e.name}]`, e, pick(nn, e)); }
