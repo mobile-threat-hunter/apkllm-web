@@ -40,7 +40,9 @@ node xcheck.mjs /tmp/native.json                # → ALL MATCH
 
 `xcheck` compares content_map / tamper_report / install_gate + extract_report (six input
 combinations) field by field, including the `checks[]` reasons `domain.js` reproduces from
-Python, and runs `extract_entry` on every entry on both sides — keyed `x:<name_hex>` (raw bytes) for a lossy name, else `s:<name>` (sha256 of the
+Python (a check's `detail` list compared in order: both sides keep the first 20 in raw-name byte
+order, #49 — libziparchive's own iteration order is `std::hash` order, which differs between
+wasm32 and x86_64, so `exceptions` / entry rows are compared by name), and runs `extract_entry` on every entry on both sides — keyed `x:<name_hex>` (raw bytes) for a lossy name, else `s:<name>` (sha256 of the
 device-faithful bytes, or the identical rejection error).
 
 ## Layout
@@ -58,7 +60,7 @@ device-faithful bytes, or the identical rejection error).
 - `smoke.mjs` — node smoke test; self-consistency across the five functions. Ground
   truth is the native binding on the same files:
   `cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -c 'import sys; sys.path.insert(0,"build/dev"); import _apk_core as c; print(c.install_gate(PATH, arsc_scope=None)["entry_count"])'`
-- `tamper_fixtures.py` — synthesizes seven fixtures: dup-name / Janus / CD-method-forged
+- `tamper_fixtures.py` — synthesizes the fixtures: dup-name / Janus / CD-method-forged
   (shapes from `apkllm/tests/test_checks.py`, the findings path) plus the review-found
   drift cases — `ctor` (extension = a JS `Object.prototype` key), `shortbad` (entry names
   libziparchive accepts but strict UTF-8 rejects, ≤16 bytes, and BOM-prefixed names) and
@@ -66,7 +68,9 @@ device-faithful bytes, or the identical rejection error).
   device readers STORED / DEFLATED plus a CD method forged to 99 per reader (strict readers
   reject, AssetManager reads raw) plus hostile names (`../`, a directory entry, case-only
   twins, a DOS device stem, a 300-byte segment, tab / newline / CR / leading-quote / formula)
-  for the md5-named downloads and the copy TSV. `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
+  for the md5-named downloads and the copy TSV; `lossy` / `lossydup` (#40: names that are not
+  strict UTF-8), and `many` (#49: > 20 items in every check `detail` list — the cap, `<key>_count` /
+  `_cut` and the kept items, in raw-name byte order on both sides), `bury` (a Master-Key duplicate after 21 per-entry findings) and `lfhlong` (a kept finding's `detail` quoting 700-byte names, cut head + `…` + tail at 512 code points, an astral char at the head's last code point). `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
 - `xcheck.py` / `xcheck.mjs` — native-vs-wasm field-by-field comparison (above).
 - `browser_check.mjs` — serves the repo root, drives `index.html` over CDP, feeds an
   APK through the file input and asserts every panel rendered; on the Extract tab it runs

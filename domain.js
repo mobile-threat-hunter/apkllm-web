@@ -402,7 +402,7 @@ function contentMap(r, headBytes) {
     role_mismatch: roleBad.length, role_indeterminate: roleUnk.length,
     extension_mismatch: extBad.length, extension_indeterminate: extUnk.length,
   };
-  const sample = (items) => items.slice(0, 20).map(it => ({ name: it.name, name_hex: it.name_hex, content_type: it.content_type }));
+  const sample = (items) => byRawName(items).slice(0, DETAIL_CAP).map(it => item(it, { content_type: it.content_type }));
   const plural = (n) => n === 1 ? "y" : "ies";
   const checks = [
     check("content.role_consistent",
@@ -427,10 +427,50 @@ function contentMap(r, headBytes) {
   return { ok: true, head_bytes: headBytes, entry_count: entries.length, summary, checks, entries };
 }
 
-// container._named (#40): a detail list of names, plus an aligned `<key>_hex` when any is lossy.
+// container._DETAIL_CAP / _capped (#49): a check's detail list keeps the first 20 items + the exact
+// `<key>_count` / `<key>_cut` (the per-entry rows hold every item; name_hex is never cut).
+const DETAIL_CAP = 20;
+function capped(key, items) {
+  return { [key]: items.slice(0, DETAIL_CAP), [key + "_count"]: items.length,
+           [key + "_cut"]: Math.max(0, items.length - DETAIL_CAP) };
+}
+
+// container._by_raw_name: raw-name byte order (hex order == byte order), so the kept items match
+// native — libziparchive iterates in hash order, and std::hash differs between wasm32 and x86_64.
+const UTF8 = new TextEncoder();
+const rawKey = (e) => e.name_hex ?? Array.from(UTF8.encode(e.name), b => b.toString(16).padStart(2, "0")).join("");
+const byRawName = (es) => es.map(e => [rawKey(e), e]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(p => p[1]);
+
+// container._SHOWN / _cut / _shown / _item: a kept item shows a LOSSY name cut to 128 code points + "…"
+// (the hex is the key, kept whole); a strict-UTF-8 name is the key and stays whole. Code points,
+// not UTF-16 units — Python's len / slice — so an astral character never splits differently.
+const SHOWN = 128;
+const cut = (t) => { const cp = Array.from(t); return cp.length > SHOWN ? cp.slice(0, SHOWN).join("") + "…" : t; };
+// container._DETAIL_SHOWN / _cut_detail: a kept tamper finding's detail (quotes the name) keeps head + "…" + tail
+const DETAIL_SHOWN = 512;
+const cutDetail = (t) => { const cp = Array.from(t); if (cp.length <= DETAIL_SHOWN) return t; const h = DETAIL_SHOWN >> 1; return cp.slice(0, h).join("") + "\u2026" + cp.slice(cp.length - (DETAIL_SHOWN - 1 - h)).join(""); };
+const shown = (name, hex) => hex ? cut(name) : name;
+const item = (e, extra) => ({ name: shown(e.name, e.name_hex), name_hex: e.name_hex, ...extra });
+
+// container._kept_findings: most severe first (walk order within one severity), every id's first
+// finding before any id's second, so per-entry findings cannot crowd a file-level one out.
+const SEVERITY_RANK = { tamper: 0, suspicious: 1, info: 2 };
+function keptFindings(fs) {
+  const rank = (f) => SEVERITY_RANK[f.severity] ?? 3;
+  const order = fs.map((_, i) => i).sort((a, b) => (rank(fs[a]) - rank(fs[b])) || (a - b));
+  const seen = new Set(), firsts = [], rest = [];
+  for (const i of order) { (seen.has(fs[i].id) ? rest : firsts).push(i); seen.add(fs[i].id); }
+  const kept = new Set(firsts.concat(rest).slice(0, DETAIL_CAP));
+  return order.filter(i => kept.has(i)).map(i => fs[i]);
+}
+
+// container._named (#40): a capped detail list of names in raw-name order, plus an aligned
+// `<key>_hex` when any kept name is lossy.
 function named(key, es) {
-  const out = { [key]: es.map(e => e.name) };
-  if (es.some(e => e.name_hex)) out[key + "_hex"] = es.map(e => e.name_hex);
+  es = byRawName(es);
+  const kept = es.slice(0, DETAIL_CAP);
+  const out = capped(key, es.map(e => shown(e.name, e.name_hex)));
+  if (kept.some(e => e.name_hex)) out[key + "_hex"] = kept.map(e => e.name_hex);
   return out;
 }
 
@@ -498,6 +538,8 @@ function tamperChecks(r) {
   const significant = tamper.concat(suspicious);
   const wouldOpen = r.libziparchive_would_open;
   const blocking = [...new Set(tamper.map(f => f.id))].sort();
+  const byId = {};
+  for (const f of findings) byId[f.id] = (byId[f.id] ?? 0) + 1;
   return [
     check("container.device_reader_opens", wouldOpen, "install_fatal",
       wouldOpen
@@ -507,8 +549,10 @@ function tamperChecks(r) {
     check("container.no_container_tampering", significant.length === 0, "warning",
       significant.length === 0
         ? "no present-vs-consumed container tampering found" + (info.length ? ` (${info.length} informational zip64 note(s))` : "")
-        : `${tamper.length} tampering + ${suspicious.length} suspicious present-vs-consumed divergence(s): ` + significant.map(f => `${f.id}(${f.entry || "file"})`).join("; "),
-      findings.length ? { findings } : null),
+        : `${tamper.length} tampering + ${suspicious.length} suspicious present-vs-consumed divergence(s): ` + keptFindings(significant).map(f => `${f.id}(${f.entry ? cut(f.entry) : "file"})`).join("; ")
+          + (significant.length > DETAIL_CAP ? ` (+${significant.length - DETAIL_CAP} more not shown)` : ""),
+      findings.length ? { ...capped("findings", findings),
+        findings: keptFindings(findings).map(f => ({ ...f, entry: shown(f.entry, f.entry_hex), detail: cutDetail(f.detail) })), by_id: byId } : null),
   ];
 }
 
@@ -585,7 +629,7 @@ function extractReport(g) {
     byDisp[e.disposition] = (byDisp[e.disposition] ?? 0) + 1;
     byReader[e.reader] = (byReader[e.reader] ?? 0) + 1;
   }
-  const brief = (e) => ({ name: e.name, name_hex: e.name_hex, reader: e.reader, method: e.method });
+  const brief = (e) => item(e, { reader: e.reader, method: e.method });
   const forged = entries.filter(e => e.diverges).map(brief);
   const undeliverable = entries.filter(e => !e.deliverable).map(brief);
   const plural = (n) => n === 1 ? "y" : "ies";
@@ -601,12 +645,12 @@ function extractReport(g) {
       forged.length
         ? `${forged.length} entr${plural(forged.length)} with method ∉ {0,8} — forge-the-method evasion (breaks generic unzip; device reads via its reader)`
         : "no method forgery — every entry method ∈ {0,8}",
-      forged.length ? { forged } : null),
+      forged.length ? capped("forged", byRawName(forged)) : null),
     check("extract.all_deliverable", !undeliverable.length, "warning",
       undeliverable.length
         ? `${undeliverable.length} entr${plural(undeliverable.length)} its mapped strict reader will NOT attempt (forged non-{0,8} method) — extract_entry raises without attempting`
         : "no entry is structurally undeliverable; every entry's mapped reader will ATTEMPT extraction — but a method-8 stream that is corrupt/mislabeled (e.g. forged 0→8) still fails at extract_entry (verified there, not here)",
-      undeliverable.length ? { undeliverable } : null),
+      undeliverable.length ? capped("undeliverable", byRawName(undeliverable)) : null),
   ];
   return { ok: true, extract_native_libs: g.extract_native_libs, target_sdk: g.target_sdk,
            entry_count: entries.length, summary, checks, entries };
