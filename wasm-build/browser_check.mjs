@@ -481,7 +481,7 @@ try {
   // Signer certificates (#58): one table row per listed certificate, the copy holds them all, and
   // no hidden character of an APK-authored DN reaches the card or its copy unescaped
   const ct = JSON.parse(await evalJs(`(() => { const r = report.certs;
-    const listed = !r.ok ? 0 : ["v2", "v3", "v31", "source_stamp"].reduce((n, k) => n + (r[k]?.signers ?? []).reduce((m, g) => m + g.certs.length, 0), 0)
+    const listed = !r.ok ? 0 : ["v2", "v3", "v31", "source_stamp"].reduce((n, k) => n + (r[k]?.signers ?? []).reduce((m, g) => m + g.certs.length + (g.lineage?.nodes ?? []).filter(x => x.cert).length, 0), 0)
       + (r.v1.files ?? []).reduce((n, f) => n + f.certs.length, 0);
     const body = document.querySelector("#certs-body");
     return JSON.stringify({ ok: r.ok, listed, rows: [...body.querySelectorAll("tbody tr")].filter(tr => tr.children.length === 8).length,
@@ -489,6 +489,10 @@ try {
       raw: new RegExp(INVIS_RE.source).test(body.textContent.replace(/[\\t\\n\\r]/g, "")) || new RegExp(INVIS_RE.source).test(COPY.certs().replace(/[\\t\\n\\r]/g, ""))
         // a DN tooltip: only the joiner's own newlines, one line per listed attribute (+ a "more" line)
         || [...body.querySelectorAll("[title]")].some(e => new RegExp(INVIS_RE.source).test(e.title.replace(/\\n/g, ""))),
+      // every signer keeps a row (a certificate-less one too), and every listed lineage node has one
+      signersOk: !r.ok || ["v2", "v3", "v31", "source_stamp"].every(k => (r[k]?.signers ?? []).every(g => body.querySelector('tr[data-signer="' + k + ':' + g.index + '"]'))),
+      nodeRows: body.querySelectorAll("tr[data-node]").length,
+      nodesListed: !r.ok ? 0 : ["v2", "v3", "v31", "source_stamp"].reduce((n, k) => n + (r[k]?.signers ?? []).reduce((m, g) => m + (g.lineage?.nodes.length ?? 0), 0), 0),
       // a value's own newline must not add a tooltip line: exactly one line per listed attribute
       tipLines: [...body.querySelectorAll("code[data-lines]")].every(e => e.title.split("\\n").length === Number(e.dataset.lines)) }); })()`));
   console.log("certs:", JSON.stringify({ ...ct, copy: ct.copy.length }));
@@ -497,6 +501,8 @@ try {
   if (ct.ok && ct.listed && ct.copy.split("\n").length < ct.listed + 3) fail("certificate copy misses rows");
   if (ct.raw) fail("an invisible / reordering character of a DN reached the certificate card or its copy");
   if (!ct.tipLines) fail("a DN tooltip has more lines than attributes (a value forged a line)");
+  if (!ct.signersOk) fail("a signer lost its own row in the certificate card");
+  if (ct.nodeRows !== ct.nodesListed) fail(`${ct.nodeRows} lineage node rows ≠ ${ct.nodesListed} listed nodes`);
   if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
     for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);

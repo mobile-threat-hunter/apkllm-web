@@ -836,20 +836,33 @@ function buildTraces(sha256, names, heads) {
 // demo; a certificate's bytes are copyable). Mirrors container.signing_certs over the engine's
 // signingCerts(path): same keys, same order (Python's {**d, k: v} keeps an existing key in place).
 const CERT_RENDERING = "jdk17_x500principal_rfc2253";  // container.CERT_RENDERING
+// container.LINEAGE_CAPABILITIES (apksig SigningCertificateLineage.java:81-100): the app-signer
+// bits a proof-of-rotation node claims (#62). A stamp lineage gives its flags no meaning.
+const LINEAGE_CAPABILITIES = [[1, "installed_data"], [2, "shared_user_id"], [4, "permission"],
+                              [8, "rollback"], [16, "auth"]];
+const capabilities = (flags) => flags === null ? null : LINEAGE_CAPABILITIES.filter(([bit]) => flags & bit).map(([, n]) => n);
 
 function signingCerts(r) {
   if (!r.ok) return r;
   const consumed = Boolean(r.cd_contiguous) && !r.zip64_locator_present;
   const certs = (raw) => raw.map(c => ({ ...c, unverified: true }));
-  const scheme = (x) => x === null ? null
-    : { ...x, consumed, signers: x.signers.map(g => ({ ...g, certs: certs(g.certs) })) };
+  const lineage = (lin, stamp) => ({ ...lin, nodes: lin.nodes.map(n => ({
+    ...n, capabilities: stamp ? null : capabilities(n.flags),
+    cert: n.cert === null ? null : { ...n.cert, unverified: true } })) });
+  const signer = (g, stamp) => {
+    const out = { ...g, certs: certs(g.certs) };
+    if ("lineage" in g) out.lineage = lineage(g.lineage, stamp);
+    return out;
+  };
+  const scheme = (x, stamp = false) => x === null ? null
+    : { ...x, consumed, signers: x.signers.map(g => signer(g, stamp)) };
   return {
     ok: true, unverified: true, rendering: CERT_RENDERING,
     file_sha256: r.file_sha256, cd_contiguous: r.cd_contiguous,
     zip64_locator_present: r.zip64_locator_present, block_found: r.block_found,
     block_reason: r.block_reason, walk_error_entry: r.walk_error_entry,
     walk_error_reason: r.walk_error_reason,
-    v2: scheme(r.v2), v3: scheme(r.v3), v31: scheme(r.v31), source_stamp: scheme(r.source_stamp),
+    v2: scheme(r.v2), v3: scheme(r.v3), v31: scheme(r.v31), source_stamp: scheme(r.source_stamp, true),
     v1: { ok: r.v1_ok, error: r.v1_error, reader: "libziparchive",
           files: r.v1.map(f => ({ ...f, certs: certs(f.certs) })), files_total: r.v1_total },
   };
@@ -859,5 +872,5 @@ root.ApkllmDomain = { HEAD_BYTES, SIGNATURES, CATEGORY, classify, unknownKind, e
                       contentMap, containerChecks, tamperChecks, READER, extractReport,
                       PAIR_NAMES, PAIR_IDS, PAIRS_CAP, signingBlock,
                       MANIFEST, APP_METADATA, V1_SIG_EXT, TRACE_HEAD, TRACE_LIST_CAP, buildTraces,
-                      CERT_RENDERING, signingCerts };
+                      CERT_RENDERING, LINEAGE_CAPABILITIES, signingCerts };
 })(typeof self !== "undefined" ? self : globalThis);
