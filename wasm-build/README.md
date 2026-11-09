@@ -3,13 +3,14 @@
 apkllm's **container layer** compiled to WebAssembly for the apkllm-web demo: real AOSP
 `system/libziparchive` (+ libbase / libutils / liblog / libcutils / incfs host deps,
 same source lists as `apkllm/CMakeLists.txt`) and apkllm's `native/container` +
-`native/apksig` (structural EOCD / signing-block pair walk + tamper scan). Nothing is
+`native/apksig` (structural EOCD / signing-block pair walk + tamper scan + the signer
+certificates as present, `certs.cpp`, hashed with AOSP libavb's portable SHA-256). Nothing is
 forked — every engine source is pulled from the apkllm / AOSP checkouts at configure
 time; this directory owns only the build recipe, a one-header musl shim, and the
 embind glue.
 
-Out of scope on purpose: BoringSSL (apkllm links it for a superseded verifier port; no
-container symbol needs it) and signature verification (Java apksig).
+Out of scope on purpose: BoringSSL (apkllm links it only into its zip probe; no container
+symbol needs it) and signature verification (Java apksig).
 
 ## Build
 

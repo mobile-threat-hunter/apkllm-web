@@ -9,9 +9,9 @@ project(apkllm_wasm LANGUAGES C CXX)
 # and wasm_module.cpp the embind glue.
 #
 # Out of scope (by design): BoringSSL `crypto`. apkllm's CMakeLists links it
-# for the superseded verifier port, but no symbol the container layer uses
-# comes from it, so the wasm build drops the whole target. Signature
-# verification is Java apksig and stays out of the web demo.
+# only into apkllm-zip-probe; no symbol the container layer uses comes from it,
+# so the wasm build drops the whole target (the signer certificates' SHA-256 is
+# libavb's). Signature verification is Java apksig and stays out of the web demo.
 #
 # Configure with:
 #   source ~/emsdk/emsdk_env.sh
@@ -135,18 +135,32 @@ target_compile_definitions(ziparchive_static PRIVATE
 target_compile_options(ziparchive_static PUBLIC -w "SHELL:-s USE_ZLIB=1")
 target_link_options(ziparchive_static PUBLIC "SHELL:-s USE_ZLIB=1")
 
+# ── libavb SHA-256 — AOSP's portable C implementation, as-is (apkllm #58: the signer
+#    certificates' digest without BoringSSL). Same two files and defines as APKLLM_ROOT.
+set(AVB "${EXT}/avb/libavb")
+if(NOT EXISTS "${AVB}/crypto/sha256_impl.c")
+    message(FATAL_ERROR "libavb not found at ${AVB}. Check AOSP_ROOT.")
+endif()
+add_library(avb_sha256_static STATIC ${AVB}/crypto/sha256_impl.c ${AVB}/avb_sysdeps_posix.c)
+# avb_sha.h picks its implementation header by include path: crypto/ = the portable C one.
+target_include_directories(avb_sha256_static PUBLIC ${AVB} ${AVB}/crypto)
+target_compile_definitions(avb_sha256_static PRIVATE AVB_COMPILATION)
+target_compile_options(avb_sha256_static PRIVATE -w)
+
 # ── apkllm native core — container install-gate + structural signing-block
-#    reader + tamper scan. Same sources as APKLLM_ROOT/CMakeLists.txt's
-#    apk_native_static MINUS the crypto dependency (apksig.cpp is the
-#    structural EOCD/Signing-Block locator and needs no BoringSSL).
+#    reader + tamper scan + signer certificates as present (certs.cpp, #58). Same
+#    sources as APKLLM_ROOT/CMakeLists.txt's apk_native_static MINUS the crypto
+#    dependency (apksig.cpp is the structural EOCD/Signing-Block locator and needs no
+#    BoringSSL; certs.cpp hashes with libavb).
 add_library(apk_native_static STATIC
     ${APKLLM_ROOT}/native/container/container.cpp
     ${APKLLM_ROOT}/native/apksig/apksig.cpp
     ${APKLLM_ROOT}/native/apksig/tamper.cpp
+    ${APKLLM_ROOT}/native/apksig/certs.cpp
 )
 target_include_directories(apk_native_static PUBLIC
     ${APKLLM_ROOT}/native/container ${APKLLM_ROOT}/native/apksig)
-target_link_libraries(apk_native_static PUBLIC ziparchive_static)
+target_link_libraries(apk_native_static PUBLIC ziparchive_static avb_sha256_static)
 
 # ── Embind binding (this file).
 add_executable(apkllm wasm_module.cpp)

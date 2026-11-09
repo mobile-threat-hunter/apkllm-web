@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "cfdf144-1";
+window.__APKLLM_BUILD = "e032a52-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -80,6 +80,9 @@ window.__APKLLM_BUILD = "cfdf144-1";
   .ver:hover { color:var(--brand); background:linear-gradient(180deg, var(--bg-3) 0%, rgba(107,161,255,0.06) 100%); box-shadow:inset 0 0 0 1px rgba(107,161,255,0.40), 0 0 0 3px rgba(107,161,255,0.10); }
   .ver code { font:inherit; color:var(--fg); font-family:var(--f-mono); }
   .sub { color:var(--fg-3); font:500 11px/1.4 var(--f-ui); letter-spacing:0.02em; }
+  h3.certh { margin:16px 0 6px; font:600 13px/1.4 var(--f-ui); color:var(--fg); }
+  ul.plain { list-style:none; padding-left:0; margin:6px 0 12px; }
+  ul.plain li { margin:3px 0; }
   #status { margin-left:auto; font:12px var(--f-ui); color:var(--fg-3); letter-spacing:0.01em; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   #status b { color:var(--fg); font-weight:600; }
 
@@ -504,6 +507,10 @@ window.__APKLLM_BUILD = "cfdf144-1";
       <div id="signing-body"></div>
     </div>
     <div class="card">
+      <h2>Signer certificates <span class="tiny">(every certificate as present, NOT verified — whose APK it is, is Java apksig's call, outside this demo; a certificate's bytes are public and copyable)</span><button class="copybtn" type="button" data-copy="certs" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div id="certs-body"></div>
+    </div>
+    <div class="card">
       <h2>Build traces <span class="tiny">(which tool built / signed it, as the container shows it — attacker-writable hints, never evidence)</span><button class="copybtn" type="button" data-copy="traces" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="traces-body"></div>
     </div>
@@ -558,7 +565,7 @@ $("#file").addEventListener("change", e => { if (e.target.files[0]) loadFile(e.t
 document.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
 $("#another").addEventListener("click", () => { $("#app").classList.remove("on"); drop.classList.remove("hidden"); });
 
-let report = null;   // { file, tamper, signing, traces, content, gate }
+let report = null;   // { file, tamper, signing, traces, certs, content, gate }
 // Load generation: the worker holds ONE APK (/input.apk) and runs calls in order, so a
 // second drop while the first is in flight would otherwise land the first file's late
 // gate result on the second file's report (review finding ADV-2). Every await checks
@@ -637,7 +644,7 @@ async function rerunGate() {
 
 // ── rendering ────────────────────────────────────────────────────────────
 function renderAll() {
-  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderTraces(); }
+  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderCerts(); renderTraces(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -1414,6 +1421,34 @@ const COPY = {
     report.tamper.entries.map(e => [e.name, e.cd_record_offset, e.lfh_offset, e.lfh_present, e.cd_method, e.lfh_method, hex(e.cd_gpbf, 4), hex(e.lfh_gpbf, 4), hex(e.cd_crc32, 8), hex(e.lfh_crc32, 8), e.cd_compressed_size, e.lfh_compressed_size, e.cd_uncompressed_size, e.lfh_uncompressed_size, e.has_data_descriptor])) : unavailable(report.tamper, "raw walk failed"),
   "signing": () => { const s = report.signing; if (!s.ok) return unavailable(s, signingFailLabel(s));
     return kvText($("#signing-body")) + (s.found ? "\n\n" + tsv(["entry", "id", "name", "name_source", "value_offset", "value_size", "read"], s.pairs.map((p, i) => [i + 1, p.id_hex, p.name ?? "", p.name_source ?? "", hex(p.offset), p.size, pairRead(s, p, i)])) : ""); },
+  "certs": () => { const r = report.certs; if (!r.ok) return unavailable(r, "unavailable");
+    // the scheme / gate facts the card shows above its tables, then every row
+    const head = [["file sha256", r.file_sha256], ["signing block", r.block_found ? "framing found" : "absent — " + (r.block_reason ?? "")]];
+    if (r.walk_error_entry) head.push(["pair walk", `stopped at pair #${r.walk_error_entry} (${r.walk_error_reason}) — later schemes read by no one`]);
+    for (const [key, label] of CERT_SCHEMES) { const sc = r[key]; if (sc === null) continue;
+      head.push([label, `pair #${sc.first_entry} of ${sc.count} with this ID · ${sc.signers_total} signer(s), ${sc.signers.length} listed` +
+        (sc.consumed ? "" : " · behind a failed gate — read by no AOSP verifier") + (sc.error ? " · " + sc.error : "")]);
+      for (const g of sc.signers) if (g.error || "min_sdk" in g || "signed_min_sdk" in g)
+        head.push([`${label} signer #${g.index}`, ["min_sdk" in g ? `SDK ${g.min_sdk}–${g.max_sdk}` : "", "signed_min_sdk" in g ? `signed SDK ${g.signed_min_sdk}–${g.signed_max_sdk}` : "",
+          g.error ? g.error + " — " + (SIGNER_ERR[g.error] ?? "") : "", g.certs_total > g.certs.length ? `${g.certs_total - g.certs.length} more certificates not listed` : ""].filter(Boolean).join(" · ")]);
+    }
+    head.push(["v1", r.v1.ok ? `${r.v1.files_total} signature block file(s), ${r.v1.files.length} listed (reader: ${r.v1.reader})` : "unreadable — " + r.v1.error]);
+    for (const f of r.v1.files ?? []) head.push([`v1 ${f.name}${f.name_hex ? " [raw " + f.name_hex + "]" : ""}`, [f.sf_present === true ? ".SF present" : f.sf_present === false ? "no .SF — apksig ignores it" : ".SF pairing unknown",
+      f.read_error ? "read: " + f.read_error : "", f.error ? "PKCS #7: " + f.error : "", f.certs_total > f.certs.length ? `${f.certs_total - f.certs.length} more certificates not listed` : "",
+      f.signer_infos_total > f.signer_infos.length ? `${f.signer_infos_total - f.signer_infos.length} more SignerInfos not listed` : ""].filter(Boolean).join(" · ")]);
+    const dn = (n) => n === null ? "" : n.display ?? ("(" + (n.jdk_rejects ?? n.error) + ")");
+    const rows = [];
+    for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) g.certs.forEach((c, i) => rows.push([label, g.index, i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", c.error ?? c.jdk_rejects ?? g.error ?? ""]));
+    for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) if (!g.certs.length) rows.push([label, g.index, "", "", "", "", "", "", g.error ?? "no certificate read"]);
+    const vname = (f) => "v1 " + f.name + (f.name_hex ? " [raw " + f.name_hex + "]" : "");
+    const infos = [];
+    for (const f of r.v1.files ?? []) {
+      if (!f.certs.length) rows.push([vname(f), "bag", "", "", "", "", "", "", f.read_error ?? f.error ?? "no certificate read"]);
+      f.certs.forEach((c, i) => rows.push([vname(f), "bag", i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", c.error ?? c.jdk_rejects ?? ""]));
+      f.signer_infos.forEach((v, i) => infos.push([vname(f), i, v.sid_kind, v.issuer ? dn(v.issuer) : "", v.serial ?? "", v.match, v.cert_index ?? ""]));
+    }
+    return "unverified: certificates as present\n" + head.map(([k, v]) => cell(k) + "\t" + cell(v)).join("\n") + "\n\n" + tsv(["scheme", "signer", "cert", "subject", "issuer", "serial", "sha256", "encoding", "note"], rows) +
+      (infos.length ? "\n\n" + tsv(["v1_file", "signer_info", "sid_kind", "issuer", "serial", "match", "cert_index"], infos) : ""); },
   "traces": () => { const t = report.traces; if (!t.ok) return unavailable(t, "unavailable") + "\nfile sha256\t" + cell(t.file_sha256 ?? "");
     return kvText($("#traces-body")) + "\n\n" + tsv(["v1_signer_file"], t.v1_signer_files.map(f => [f])) +
       (t.app_metadata ? "\n\n" + tsv(["app_metadata_key", "value"], Object.entries(t.app_metadata)) : ""); },
@@ -1525,6 +1560,82 @@ function renderSigning() {
   </dl>` + (s.pairs.length ? `<div class="tablewrap scrollbox" style="margin-top:10px" tabindex="0" role="region" aria-label="Signing block pairs"><table><thead><tr><th class="num">#</th><th>id</th><th>name</th><th>source</th><th class="num">value offset</th><th class="num">value size</th><th>read</th></tr></thead><tbody>` +
     s.pairs.map((p, i) => { const r = pairRead(s, p, i); return `<tr class="${r.startsWith("later") ? "fail" : ""}"><td class="num">${i + 1}</td><td>${p.id_hex}</td><td>${p.name ? esc(p.name) : '<span class="pill na">unknown</span>'}</td><td>${p.name_source ?? "—"}</td><td class="num">${hex(p.offset)}</td><td class="num">${p.size}</td><td class="tiny">${r}</td></tr>`; }).join("") + "</tbody></table></div>" : "") +
     `<p class="note">Names: <b>aosp</b> = an apksig constant, <b>observed</b> = measured samples (not AOSP). No value is read here; whether any scheme verifies is apksig's call (apkllm.signing), not this page's.</p>`;
+}
+
+// Signer certificates (container.signing_certs, #58) ------------------------
+// The DN shown is `display`: the JDK 17 RFC 2253 string with controls / bidi / invisibles / space
+// runs escaped \u{XXXX} by the engine. Lookalike letters cannot be escaped — the attrs (as encoded)
+// and the sha256 are the exact identity.
+const CERT_SCHEMES = [["v2", "v2"], ["v3", "v3"], ["v31", "v3.1"], ["source_stamp", "source stamp"]];
+const SIGNER_ERR = {
+  "malformed signer": "apksig stops its signer walk here",
+  "malformed signature": "apksig drops this signer and never parses the certificates below",
+  "no signatures": "apksig drops this signer and never parses the certificates below",
+  "malformed signed data": "apksig stops here only if one of its signatures verified",
+};
+const MATCH_NOTE = {
+  exact: "names this certificate (identical issuer bytes)", equivalent: "names this certificate (same names, Printable ≡ UTF8)",
+  canonical_unknown: "apksig compares canonical names (case, NFKD) — may or may not match",
+  none: "no certificate in the bag has that serial", unknown: "an earlier bag entry, or the SignerInfo itself, could not be compared",
+  never: "a subjectKeyIdentifier — apksig never matches it",
+};
+// The attributes as encoded, one per line. Each APK-authored value is escaped (\uXXXX) BEFORE the
+// lines are joined, so a value holding a newline / U+2028 / bidi mark cannot forge a line.
+const visRaw = (t) => String(t).replace(INVIS_RE, uEsc);
+const attrTip = (n) => n.attrs.map(a => `RDN ${a.rdn}: ${visRaw(a.keyword || a.oid)} (tag ${a.tag}) = ${a.text === null ? "#" + a.value_hex : visRaw(a.text)}`)
+  .concat(n.attrs_total > n.attrs.length ? [`… ${n.attrs_total - n.attrs.length} more attributes not listed`] : []).join("\n");
+function dnCell(n) {
+  if (!n) return '<span class="pill na">—</span>';
+  if (n.display !== null) return `<code data-lines="${n.attrs.length + (n.attrs_total > n.attrs.length ? 1 : 0)}" title="${esc(attrTip(n))}">${esc(n.display)}</code>`;
+  return n.jdk_rejects ? `<span class="pill warn">JDK refuses</span> <span class="tiny">${vis(n.jdk_rejects)}</span>` : `<span class="pill bad">unreadable</span> <span class="tiny">${vis(n.error)}</span>`;
+}
+function certNotes(c) {
+  const n = [];
+  if (c.error) n.push(`<span class="pill bad">${vis(c.error)}</span>`);
+  if (c.jdk_rejects) n.push(`<span class="pill warn">JDK refuses: ${vis(c.jdk_rejects)}</span>`);
+  if (c.encoding === "ber") n.push('<span class="pill warn">BER</span> <span class="tiny">apksig re-encodes it first</span>');
+  if (c.trailing_bytes) n.push(`<span class="tiny">${c.trailing_bytes} trailing bytes</span>`);
+  return n.join(" ");
+}
+const certRow = (label, i, c) => `<tr><td>${label}</td><td class="num">${i}</td><td>${dnCell(c.subject)}</td><td>${dnCell(c.issuer)}</td><td>${c.serial === null ? "—" : `<code>${vis(c.serial)}</code>`}</td><td><code title="${c.sha256}">${c.sha256.slice(0, 16)}…</code></td><td class="num">${c.size}</td><td>${certNotes(c)}</td></tr>`;
+const CERT_HEAD = '<thead><tr><th>signer</th><th class="num">cert</th><th>subject</th><th>issuer</th><th>serial</th><th>sha256</th><th class="num">size</th><th>notes</th></tr></thead>';
+function renderCerts() {
+  const r = report.certs;
+  const el = $("#certs-body");
+  if (!r.ok) { el.innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${vis(r.error)}</span>`; return; }
+  const parts = [];
+  for (const [key, label] of CERT_SCHEMES) {
+    const sc = r[key];
+    if (sc === null) continue;
+    const rows = sc.signers.flatMap(g => {
+      const signedDiffers = "signed_min_sdk" in g && "min_sdk" in g && (g.signed_min_sdk !== g.min_sdk || g.signed_max_sdk !== g.max_sdk);
+      const sdk = "min_sdk" in g ? ` <span class="tiny">SDK ${g.min_sdk}–${g.max_sdk}</span>` +
+        (signedDiffers ? ` <span class="pill warn">signed ${g.signed_min_sdk}–${g.signed_max_sdk}</span> <span class="tiny">≠ the signer's (apksig rejects a mismatch)</span>` : "") : "";
+      const who = `#${g.index}${sdk}` + (g.error ? ` <span class="pill warn">${esc(g.error)}</span> <span class="tiny">${SIGNER_ERR[g.error] ?? ""}</span>` : "");
+      const certs = g.certs.map((c, i) => certRow(who, i, c));
+      if (g.certs_total > g.certs.length) certs.push(`<tr><td colspan="8" class="tiny">signer #${g.index}: ${g.certs_total - g.certs.length} more certificates not listed</td></tr>`);
+      return certs.length ? certs : [`<tr><td>${who}</td><td colspan="7" class="tiny">no certificate read</td></tr>`];
+    });
+    parts.push(`<h3 class="certh">${label} <span class="tiny">pair #${sc.first_entry}${sc.count > 1 ? ` — ${sc.count} pairs of this ID, only the first is read` : ""} · ${sc.signers_total} signer${sc.signers_total === 1 ? "" : "s"}${sc.signers_total > sc.signers.length ? ` (${sc.signers.length} listed)` : ""}</span>${sc.consumed ? "" : ' <span class="pill warn">behind a failed gate — read by no AOSP verifier</span>'}${sc.error ? ` <span class="pill bad">${vis(sc.error)}</span>` : ""}</h3>` +
+      `<div class="tablewrap"><table>${CERT_HEAD}<tbody>${rows.join("")}</tbody></table></div>`);
+  }
+  if (r.walk_error_entry) parts.push(`<p class="note">The pair walk stopped at pair #${r.walk_error_entry} (${vis(r.walk_error_reason)}): any scheme after it is read by no one and is not listed.</p>`);
+  const v1 = r.v1;
+  if (!v1.ok) parts.push(`<h3 class="certh">v1 (JAR)</h3><span class="pill bad">unreadable</span> <span class="err">${vis(v1.error)}</span>`);
+  else if (v1.files_total) {
+    parts.push(`<h3 class="certh">v1 (JAR) <span class="tiny">${v1.files_total} signature block file${v1.files_total === 1 ? "" : "s"}${v1.files_total > v1.files.length ? ` (${v1.files.length} listed)` : ""}, read by the device's strict reader — apksig reads with its own, which can differ on a tampered container</span></h3>` +
+      v1.files.map(f => {
+        const sf = f.sf_present === true ? "" : f.sf_present === false ? ' <span class="pill warn">no .SF — apksig ignores it</span>' : ' <span class="pill na">.SF pairing unknown (name not UTF-8)</span>';
+        const head = `<p><code>${vis(f.name)}</code>${f.name_hex ? ` <span class="tiny">raw name ${f.name_hex}</span>` : ""}${sf}${f.read_error ? ` <span class="pill bad">${vis(f.read_error)}</span>` : ""}${f.error ? ` <span class="pill bad">${vis(f.error)}</span>` : ""}</p>`;
+        const certs = f.certs.map((c, i) => certRow("bag", i, c)).join("") + (f.certs_total > f.certs.length ? `<tr><td colspan="8" class="tiny">${f.certs_total - f.certs.length} more certificates not listed</td></tr>` : "");
+        // a structural pointer, never a trust signal (issuer + serial are copyable): no green pill
+        const infos = f.signer_infos.map((v, i) => `<li>SignerInfo #${i}: <span class="pill ${v.cert_index !== null || v.match === "none" || v.match === "never" ? "na" : "warn"}">${esc(v.match)}</span>${v.cert_index !== null ? ` → bag cert ${v.cert_index}${v.cert_index >= f.certs.length ? " (not listed)" : ""}` : ""} <span class="tiny">${MATCH_NOTE[v.match] ?? ""}${v.issuer ? " · issuer " : ""}</span>${v.issuer ? dnCell(v.issuer) : ""}${v.serial !== null ? ` <span class="tiny">serial</span> <code>${vis(v.serial)}</code>` : ""}</li>`).join("");
+        return head + (f.certs.length ? `<div class="tablewrap"><table>${CERT_HEAD}<tbody>${certs}</tbody></table></div>` : "") +
+          (infos ? `<ul class="plain">${infos}</ul>` : "") + (f.signer_infos_total > f.signer_infos.length ? `<p class="tiny">${f.signer_infos_total - f.signer_infos.length} more SignerInfos not listed</p>` : "");
+      }).join(""));
+  }
+  if (!parts.length) parts.push(`<p class="note">No signer certificate: ${r.block_found ? "no v2 / v3 / v3.1 / stamp pair" : "no APK Signing Block (" + vis(r.block_reason ?? "") + ")"} and no v1 signature block file.</p>`);
+  el.innerHTML = parts.join("") + `<p class="note">Read where apksig's parsers find each certificate (the first pair of each scheme ID; META-INF/*.RSA|.DSA|.EC), with nothing verified. Subject / issuer are the JDK 17 <code>X500Principal.getName()</code> form apksig reports, with hidden characters escaped; hover a name for its attributes as encoded. Which v1 SignerInfo the device uses is not knowable from the structure.</p>`;
 }
 
 // Build traces -------------------------------------------------------------
