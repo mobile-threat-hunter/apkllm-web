@@ -11,6 +11,8 @@ combination the UI can select (the Python install_gate wrapper derives arsc_scop
 role facts; the demo takes the scope directly, so the core binding is called the same way
 wasm_module.cpp is). Plus extract_report (the four-reader decompression plan) per case and
 extract_entry over every entry name — sha256 of the device-faithful bytes or the error.
+And the structural signing-side reads: signing_block (the APK Signing Block's pairs) and
+build_traces (v1 signer files, MANIFEST.MF main section, AGP app-metadata).
 """
 import hashlib
 import json
@@ -93,6 +95,8 @@ def main(out, apks):
                 for enl, tsdk, scope, page in GATE_CASES
             },
             "extracted": extracted(p, names),
+            "signing_block": container.signing_block(p),
+            "build_traces": container.build_traces(p),
         }
     with open(out, "w") as f:
         json.dump(res, f, default=lambda o: list(o) if isinstance(o, (set, bytes)) else str(o))

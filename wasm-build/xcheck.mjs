@@ -58,7 +58,7 @@ for (const [path, n] of Object.entries(native)) {
   m.FS.writeFile(VFS, new Uint8Array(readFileSync(path)));
 
   // content
-  const heads = m.entryHeads(VFS, D.HEAD_BYTES);
+  const heads = m.entryHeads(VFS, D.HEAD_BYTES, null);
   const c = D.contentMap(heads, D.HEAD_BYTES);
   diff("content.ok", c.ok, n.content.ok);
   if (c.ok && n.content.ok) {
@@ -126,6 +126,26 @@ for (const [path, n] of Object.entries(native)) {
     diff(`extracted[${name}]`, we, ne);
   }
   console.log(`  ${Object.keys(n.extracted).length} entries extracted & compared`);
+
+  // signing block — exact, key order included (domain.js builds the same insertion order)
+  diff("signing_block", D.signingBlock(m.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS)), n.signing_block);
+
+  // build traces. Dicts keyed by attacker strings (app_metadata, unreadable) are compared sorted:
+  // a JS object puts integer-like keys first. Past the 64-name cap WHICH v1 signer files are kept
+  // follows libziparchive's hash-table iteration (murmur2 on wasm32 vs CityHash64 on x86-64), so
+  // there only the total and the count are compared.
+  const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
+  const bt = D.buildTraces(sha, m.entryNames(VFS, "META-INF/", D.V1_SIG_EXT, D.TRACE_LIST_CAP),
+                           m.entryHeads(VFS, D.TRACE_HEAD, [D.MANIFEST, D.APP_METADATA]));
+  const nb = n.build_traces;
+  const normBT = (b) => {
+    const o = { ...b };
+    for (const k of ["app_metadata", "unreadable"]) if (o[k]) o[k] = sortedObj(o[k]);
+    if (o.v1_signer_files_total > D.TRACE_LIST_CAP) o.v1_signer_files = o.v1_signer_files.length;
+    return o;
+  };
+  diff("build_traces", normBT(bt), normBT(nb));
+  if (bt.app_metadata) diff("build_traces.app_metadata.order", Object.keys(bt.app_metadata).filter(k => !/^(0|[1-9]\d*)$/.test(k)), Object.keys(nb.app_metadata).filter(k => !/^(0|[1-9]\d*)$/.test(k)));
 }
 
 if (diffs) { console.error(diffs, "difference(s)"); process.exit(1); }

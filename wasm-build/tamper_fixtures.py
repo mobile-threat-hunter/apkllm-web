@@ -22,6 +22,15 @@ No apkllm import. Shapes:
                and the bundle's path cases: "../", a directory entry, a case-only twin,
                a DOS device stem, a 300-byte segment and tab/newline/CR/quote/formula names (copy), a real MD5
                collision pair and an identical-content pair (md5 naming)
+  sigpairs.apk APK Signing Block with duplicate v2 / unknown IDs, observed IDs + build traces:
+               v1 signer files (nested, wrong-case decoy), a MANIFEST.MF read by apksig's rules
+               (blank lead lines, continuation, CRLF / CR, dotless-i "Built-By"), hostile
+               app-metadata keys (__proto__, numeric, \x1c / U+FEFF whitespace, control chars)
+  sigbad.apk   a malformed pair after a valid one (walk_error) + a forged-method MANIFEST.MF (unreadable)
+  sigcut.apk   300 pairs (cap 256) with the only v2 pair at #290 — named counts the whole walk
+  sigsplit.apk junk between the CD and the EOCD — cd_contiguous False with the block present
+  mfcut.apk    a MANIFEST.MF main section running past the 4 KiB head; app-metadata, no final newline
+  v1many.apk   70 v1 signature files — more than the 64 build_traces lists
 """
 import struct
 import sys
@@ -90,6 +99,21 @@ def forge_cd_methods(path: Path, prefixes, method: int):
             struct.pack_into("<H", raw, i + 10, method)
         i = raw.find(b"PK\x01\x02", i + 4)
     path.write_bytes(raw)
+
+
+def with_signing_block(path: Path, pairs, junk_before_eocd: bytes = b""):
+    """Insert an APK Signing Block (ID→value pairs, each ``(id, value)`` or raw pair bytes) between
+    the last entry and the CD and fix the EOCD's CD offset; optional junk between CD and EOCD."""
+    raw = bytearray(path.read_bytes())
+    e = raw.rfind(b"PK\x05\x06")
+    cd_size, cd_off = struct.unpack_from("<II", raw, e + 12)
+    body = b"".join(p if isinstance(p, bytes) else struct.pack("<QI", 4 + len(p[1]), p[0]) + p[1] for p in pairs)
+    size = len(body) + 8 + 16
+    block = struct.pack("<Q", size) + body + struct.pack("<Q", size) + b"APK Sig Block 42"
+    eocd = bytearray(raw[e:])
+    struct.pack_into("<I", eocd, 16, cd_off + len(block))
+    path.write_bytes(bytes(raw[:cd_off]) + block + bytes(raw[cd_off:e]) + junk_before_eocd + bytes(eocd))
+    return path
 
 
 def main(out: Path):
@@ -210,7 +234,40 @@ def main(out: Path):
     ])
     for n in ("classes3.dex", "lib/arm64-v8a/libf.so", "res/raw/f.bin", "assets/f.bin", "META-INF/F.SF", "data.bin"):
         forge_cd_method(readers, n, 99)
-    for p in (dup, janus, cdforge, ctor, shortbad, tail, readers):
+    S = zipfile.ZIP_STORED
+    V2, V3, FROST, AGP, UNK = 0x7109871A, 0xF05368C0, 0x2146444E, 0x504B4453, 0x12345678
+    mf = (b"\r\n\nManifest-Version: 1.0\r\nCreated-By: Android Gradle 8.1\r\n continued \xff\r"
+          b"Bu\xc4\xb1lt-By: signflinger\nX-Odd\n\nName: classes.dex\nCreated-By: not-main\n")
+    meta = ("\ufeffappMetadataVersion=1.1\n#comment=1\n!bang=1\nno separator\n__proto__=polluted\n2=two\n1=one\n"
+            "\x1c spaced = value \x1f\nkey=a=b\nctl=\x1b[31mred\u202eevil\nandroidGradlePluginVersion=8.1.0\n").encode()
+    sigpairs = build(out / "sigpairs.apk", [
+        ("AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20), S),
+        ("META-INF/MANIFEST.MF", mf, zipfile.ZIP_DEFLATED),
+        ("META-INF/BNDLTOOL.SF", b"Signature-Version: 1.0\r\n", S),
+        ("META-INF/BNDLTOOL.RSA", b"0" * 8, S),
+        ("META-INF/sub/dir/K.EC", b"0", S),
+        ("META-INF/lower.sf", b"decoy: suffix match is case-sensitive", S),
+        ("META-INF/com/android/build/gradle/app-metadata.properties", meta, S),
+    ])
+    with_signing_block(sigpairs, [(V2, b"first v2"), (V3, b"v3"), (UNK, b"u1"), (V2, b"second v2"),
+                                  (UNK, b"u2"), (FROST, b"frost"), (AGP, b"agp"), (0x42726577, b"\0" * 4)])
+    sigbad = build(out / "sigbad.apk", [("AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20), S),
+                                        ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\nCreated-By: x\n\n", S)])
+    forge_cd_method(sigbad, "META-INF/MANIFEST.MF", 99)
+    with_signing_block(sigbad, [(V2, b"ok"), struct.pack("<QI", 2, V3)])   # pair length < 4: malformed
+    sigcut = build(out / "sigcut.apk", [("AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20), S)])
+    with_signing_block(sigcut, [(V2 if i == 289 else 0x1000 + i, b"x") for i in range(300)])
+    sigsplit = build(out / "sigsplit.apk", [("AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20), S)])
+    with_signing_block(sigsplit, [(V2, b"v2")], junk_before_eocd=b"JUNK" * 4)
+    long_mf = b"Manifest-Version: 1.0\n" + b"".join(b"X-Pad-%04d: %s\n" % (i, b"p" * 40) for i in range(120)) + b"Created-By: late\n\n"
+    mfcut = build(out / "mfcut.apk", [
+        ("AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20), S),
+        ("META-INF/MANIFEST.MF", long_mf, zipfile.ZIP_DEFLATED),
+        ("META-INF/com/android/build/gradle/app-metadata.properties", b"a=1\nb=2", S),
+    ])
+    v1many = build(out / "v1many.apk", [("AndroidManifest.xml", b"\x03\x00\x08\x00" + bytes(20), S)] +
+                   [(f"META-INF/S{i:02d}.SF", b"Signature-Version: 1.0\n", S) for i in range(70)])
+    for p in (dup, janus, cdforge, ctor, shortbad, tail, readers, sigpairs, sigbad, sigcut, sigsplit, mfcut, v1many):
         print(p)
 
 

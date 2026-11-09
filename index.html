@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "779c17c-3";
+window.__APKLLM_BUILD = "cfdf144-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -365,7 +365,7 @@ window.__APKLLM_BUILD = "779c17c-3";
     <div class="tab" data-tab="content">Content<span class="n" id="n-content"></span></div>
     <div class="tab" data-tab="images">Images<span class="n" id="n-images"></span></div>
     <div class="tab" data-tab="tamper">Tamper scan<span class="n" id="n-tamper"></span></div>
-    <div class="tab" data-tab="signing">Signing block<span class="n" id="n-signing"></span></div>
+    <div class="tab" data-tab="signing">Signing<span class="n" id="n-signing"></span></div>
   </div>
 
   <!-- ── Install gate ─────────────────────────────────────────────── -->
@@ -500,8 +500,12 @@ window.__APKLLM_BUILD = "779c17c-3";
   <!-- ── Signing block ────────────────────────────────────────────── -->
   <section class="panel" id="panel-signing">
     <div class="card">
-      <h2>ZIP tail &amp; APK Signing Block <span class="tiny">(structural location only — verification is Java apksig, outside this demo)</span><button class="copybtn" type="button" data-copy="signing" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <h2>APK Signing Block <span class="tiny">(ID→value pairs as present — structural only; whether a scheme verifies is Java apksig, outside this demo)</span><button class="copybtn" type="button" data-copy="signing" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="signing-body"></div>
+    </div>
+    <div class="card">
+      <h2>Build traces <span class="tiny">(which tool built / signed it, as the container shows it — attacker-writable hints, never evidence)</span><button class="copybtn" type="button" data-copy="traces" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div id="traces-body"></div>
     </div>
   </section>
 </div>
@@ -554,7 +558,7 @@ $("#file").addEventListener("change", e => { if (e.target.files[0]) loadFile(e.t
 document.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
 $("#another").addEventListener("click", () => { $("#app").classList.remove("on"); drop.classList.remove("hidden"); });
 
-let report = null;   // { file, tamper, signing, content, gate }
+let report = null;   // { file, tamper, signing, traces, content, gate }
 // Load generation: the worker holds ONE APK (/input.apk) and runs calls in order, so a
 // second drop while the first is in flight would otherwise land the first file's late
 // gate result on the second file's report (review finding ADV-2). Every await checks
@@ -633,7 +637,7 @@ async function rerunGate() {
 
 // ── rendering ────────────────────────────────────────────────────────────
 function renderAll() {
-  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); }
+  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderTraces(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -655,11 +659,11 @@ function renderFilebar() {
     pills.push(sig ? `<span class="pill warn">${sig} tamper finding${sig > 1 ? "s" : ""}</span>` : '<span class="pill ok">no tampering</span>');
   }
   if (gate.ok) pills.push(gate.installable === null ? '<span class="pill warn">installable: needs manifest</span>' : gate.installable ? '<span class="pill ok">installable (container)</span>' : '<span class="pill bad">not installable (container)</span>');
-  if (signing.ok) pills.push(signing.has_signing_block ? '<span class="pill info">APK Signing Block</span>' : '<span class="pill na">no signing block</span>');
+  if (signing.ok) pills.push(signing.found ? '<span class="pill info">APK Signing Block</span>' : '<span class="pill na">no signing block</span>');
   if (content.ok && content.summary.role_mismatch) pills.push(`<span class="pill bad">${content.summary.role_mismatch} role mismatch</span>`);
   $("#fpills").innerHTML = pills.join(" ");
   // tab count badges (dexllm-web .dextab .n). The number is the entry count (tamper: finding
-  // count / "clean"; signing: scheme-block count / "none"); the colour follows the SAME verdict
+  // count / "clean"; signing: pair count / "none"); the colour follows the SAME verdict
   // the tab shows — red = fails / refused, amber = conditional on an unknown manifest input.
   const badge = (id, text, level) => {
     const el = $(id); el.textContent = text;
@@ -675,8 +679,10 @@ function renderFilebar() {
   else badge("#n-content", "refused", "alert");
   if (tamper.ok) { const n = tamper.findings.filter(f => f.severity !== "info").length; badge("#n-tamper", n || "clean", n ? "alert" : null); }
   else badge("#n-tamper", "failed", "alert");
-  if (signing.ok) badge("#n-signing", signing.has_signing_block ? signing.scheme_blocks.length : "none", null);
-  else badge("#n-signing", "not a ZIP", "alert");
+  // amber: a pair walk stopped at a malformed pair, an ID occurs twice (only its first is read), or
+  // a gate both AOSP readers apply first fails (then neither consumes the block)
+  if (signing.ok) badge("#n-signing", signing.found ? signing.pairs_total : "none", signing.found && (signing.walk_error || signing.duplicate_ids.length || !signing.cd_contiguous || signing.zip64_locator_present) ? "warn" : null);
+  else badge("#n-signing", signingFailLabel(signing), "alert");
 }
 
 // Install gate -------------------------------------------------------------
@@ -1360,7 +1366,13 @@ function copyText(text, el) {
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(ok).catch(() => { if (_copyFallback(text)) ok(); else bad(); });
   else if (_copyFallback(text)) ok(); else bad();
 }
-const escCell = (str) => str.replace(/[\\\t\n\r"\u0085\u2028\u2029]/g, c => ({ "\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r", '"': '\\"' })[c] ?? "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+// characters that are invisible or reorder text (C0/C1 controls, bidi marks / overrides / isolates,
+// zero-width and format characters, tag characters): never shown or copied raw
+const INVIS = "\\x00-\\x1f\\x7f-\\x9f\\u00ad\\u061c\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u2064\\u2066-\\u2069\\ufeff\\ufff9-\\ufffb";
+const INVIS_RE = new RegExp("["+INVIS+"]|\\udb40[\\udc00-\\udc7f]", "g");
+const uEsc = (c) => [...Array(c.length).keys()].map(k => "\\u" + c.charCodeAt(k).toString(16).padStart(4, "0")).join("");
+const ESC_RE = new RegExp('[\\\\"]|' + INVIS_RE.source, "g");
+const escCell = (str) => str.replace(ESC_RE, c => ({ "\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r", '"': '\\"' })[c] ?? uEsc(c));
 const cell = (v) => {
   if (v === null || v === undefined) return "";
   if (typeof v === "number" || typeof v === "boolean") return String(v);
@@ -1400,8 +1412,11 @@ const COPY = {
   "tamper-findings": () => report.tamper.ok ? tsv(["severity", "id", "entry", "detail"], report.tamper.findings.map(f => [f.severity, f.id, f.entry || "(whole file)", f.detail])) : unavailable(report.tamper, "raw walk failed"),
   "tamper-entries": () => report.tamper.ok ? tsv(["name", "cd_record_offset", "lfh_offset", "lfh_present", "cd_method", "lfh_method", "cd_gpbf", "lfh_gpbf", "cd_crc32", "lfh_crc32", "cd_compressed_size", "lfh_compressed_size", "cd_uncompressed_size", "lfh_uncompressed_size", "has_data_descriptor"],
     report.tamper.entries.map(e => [e.name, e.cd_record_offset, e.lfh_offset, e.lfh_present, e.cd_method, e.lfh_method, hex(e.cd_gpbf, 4), hex(e.lfh_gpbf, 4), hex(e.cd_crc32, 8), hex(e.lfh_crc32, 8), e.cd_compressed_size, e.lfh_compressed_size, e.cd_uncompressed_size, e.lfh_uncompressed_size, e.has_data_descriptor])) : unavailable(report.tamper, "raw walk failed"),
-  "signing": () => { const s = report.signing; if (!s.ok) return unavailable(s, s.is_zip === false ? "no EOCD — not a ZIP" : "failed");
-    return kvText($("#signing-body")) + (s.has_signing_block ? "\n\n" + tsv(["id", "scheme", "value_offset", "value_size"], s.scheme_blocks.map(b => [hex(b.id, 8), SCHEME_NAMES[b.id] || "unknown block id", hex(b.value_offset), b.value_size])) : ""); },
+  "signing": () => { const s = report.signing; if (!s.ok) return unavailable(s, signingFailLabel(s));
+    return kvText($("#signing-body")) + (s.found ? "\n\n" + tsv(["entry", "id", "name", "name_source", "value_offset", "value_size", "read"], s.pairs.map((p, i) => [i + 1, p.id_hex, p.name ?? "", p.name_source ?? "", hex(p.offset), p.size, pairRead(s, p, i)])) : ""); },
+  "traces": () => { const t = report.traces; if (!t.ok) return unavailable(t, "unavailable") + "\nfile sha256\t" + cell(t.file_sha256 ?? "");
+    return kvText($("#traces-body")) + "\n\n" + tsv(["v1_signer_file"], t.v1_signer_files.map(f => [f])) +
+      (t.app_metadata ? "\n\n" + tsv(["app_metadata_key", "value"], Object.entries(t.app_metadata)) : ""); },
 };
 // the name a click-to-copy item stands for, straight from the report (byte-exact)
 const ITEM = {
@@ -1409,7 +1424,7 @@ const ITEM = {
   content: (i) => report.content.entries?.[i]?.name, tamper: (i) => report.tamper.entries?.[i]?.name,
   finding: (i) => report.tamper.findings?.[i]?.entry, images: (k) => imgItems[k]?.name,
 };
-const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", images: "Images", tamper: "Tamper scan", signing: "Signing block" };
+const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", images: "Images", tamper: "Tamper scan", signing: "Signing" };
 let pendingCopy = 0;
 // one delegated listener: card buttons + click-to-copy items (rows re-render, so no per-node wiring)
 document.addEventListener("click", (e) => {
@@ -1475,19 +1490,62 @@ function renderTamperTable() {
 }
 
 // Signing block ------------------------------------------------------------
-const SCHEME_NAMES = { 0x7109871a: "APK Signature Scheme v2", 0xf05368c0: "APK Signature Scheme v3", 0x1b93ad61: "APK Signature Scheme v3.1", 0x6dff800d: "SourceStamp v2", 0x42726577: "verity padding" };
+// Attacker-written text (pair walk reasons, manifest values, file names) may hold control or
+// bidi characters: shown as \uXXXX so nothing invisible reorders or hides what is displayed.
+const vis = (t) => esc(String(t).replace(INVIS_RE, uEsc));
+const signingFailLabel = (s) => /End of Central Directory/.test(s.error || "") ? "not a ZIP" : "failed";
+// which copy of an ID apksig / the device read: the FIRST pair of an ID (findApkSignatureSchemeBlock)
+function pairRead(s, p, i) {
+  if (!s.cd_contiguous || s.zip64_locator_present) return "behind a failed gate — read by no AOSP verifier";
+  if (p.name === null) return "unknown ID — read by no AOSP verifier";
+  return s.named[p.name]?.first_entry === i + 1 ? "first of its ID — the one apksig reads" : "later copy — never verified";
+}
 function renderSigning() {
   const s = report.signing;
   const el = $("#signing-body");
-  if (!s.ok) { el.innerHTML = `<span class="pill bad">${s.is_zip === false ? "no EOCD — not a ZIP" : "failed"}</span> <span class="err">${esc(s.error)}</span>`; return; }
+  if (!s.ok) { el.innerHTML = `<span class="pill bad">${signingFailLabel(s)}</span> <span class="err">${vis(s.error)}</span>`; return; }
+  const gates = `<dt>CD ends where the EOCD starts</dt><dd>${tri(s.cd_contiguous)}</dd>
+    <dt>ZIP64 locator</dt><dd>${s.zip64_locator_present ? '<span class="pill warn">present</span> <span class="tiny">the platform refuses ZIP64</span>' : "absent"}</dd>`;
+  const gateNote = !s.cd_contiguous || s.zip64_locator_present
+    ? `<p class="note">A block behind a failed gate is consumed by neither apksig nor the platform verifier (both check the gates before locating the block).</p>` : "";
+  if (!s.found) {
+    el.innerHTML = `<dl class="kv"><dt>APK Signing Block</dt><dd>absent — <span class="tiny">${vis(s.reason)}</span></dd>${gates}</dl>${gateNote}` +
+      `<p class="note">No v2 / v3 / v3.1 / stamp block. A v1 (JAR) signature lives in META-INF/* entries — see Build traces below.</p>`;
+    return;
+  }
+  const named = Object.entries(s.named);
   el.innerHTML = `<dl class="kv">
-    <dt>file size</dt><dd>${s.file_size}</dd>
-    <dt>EOCD</dt><dd>${hex(s.eocd_offset)}</dd>
-    <dt>central directory</dt><dd>@ ${hex(s.central_dir_offset)} · ${s.central_dir_size} bytes${s.zip64_locator_present ? ' · <span class="pill warn">zip64 locator present</span>' : ""}</dd>
-    <dt>APK Signing Block</dt><dd>${s.has_signing_block ? `present @ ${hex(s.signing_block_offset)} · ${s.signing_block_size} bytes` : `absent — <span class="tiny">${esc(s.signing_block_error || "")}</span>`}</dd>
-  </dl>` + (s.has_signing_block ? `<div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>id</th><th>scheme</th><th class="num">value offset</th><th class="num">value size</th></tr></thead><tbody>` +
-    s.scheme_blocks.map(b => `<tr><td>${hex(b.id, 8)}</td><td>${esc(SCHEME_NAMES[b.id] || "unknown block id")}</td><td class="num">${hex(b.value_offset)}</td><td class="num">${b.value_size}</td></tr>`).join("") + "</tbody></table></div>" : "") +
-    `<p class="note">A v1 (JAR) signature lives in META-INF/* entries — see the Install gate table (class <code>meta</code>). Whether any scheme actually verifies is apksig's call (apkllm.signing), not this page's.</p>`;
+    <dt>APK Signing Block</dt><dd>present @ ${hex(s.block_offset)} · ${s.block_size} bytes</dd>
+    ${gates}
+    <dt>pairs</dt><dd>${s.pairs_total}${s.pairs_cut ? ` <span class="tiny">(first ${s.pairs.length} listed, ${s.pairs_cut} more not listed)</span>` : ""}</dd>
+    <dt>named IDs (whole walk)</dt><dd>${named.length ? named.map(([n, t]) => `${esc(n)} ×${t.count} <span class="tiny">first #${t.first_entry}</span>`).join(" · ") : "none"}</dd>
+    <dt>duplicate IDs</dt><dd>${s.duplicate_ids.length ? `<span class="pill warn">${s.duplicate_ids.map(esc).join(", ")}</span> <span class="tiny">only the first pair of an ID is read</span>` : "none"}</dd>
+    <dt>unknown IDs</dt><dd>${s.unknown_ids.length ? s.unknown_ids.map(esc).join(", ") + ' <span class="tiny">a channel tool, a packer or an unknown payload</span>' : "none"}</dd>
+    <dt>pair walk</dt><dd>${s.walk_error ? `<span class="pill warn">stopped at pair #${s.walk_error.entry}</span> <span class="tiny">${vis(s.walk_error.reason)} — the bytes from there on are read by no one</span>` : "every pair well-formed"}</dd>
+  </dl>` + (s.pairs.length ? `<div class="tablewrap scrollbox" style="margin-top:10px" tabindex="0" role="region" aria-label="Signing block pairs"><table><thead><tr><th class="num">#</th><th>id</th><th>name</th><th>source</th><th class="num">value offset</th><th class="num">value size</th><th>read</th></tr></thead><tbody>` +
+    s.pairs.map((p, i) => { const r = pairRead(s, p, i); return `<tr class="${r.startsWith("later") ? "fail" : ""}"><td class="num">${i + 1}</td><td>${p.id_hex}</td><td>${p.name ? esc(p.name) : '<span class="pill na">unknown</span>'}</td><td>${p.name_source ?? "—"}</td><td class="num">${hex(p.offset)}</td><td class="num">${p.size}</td><td class="tiny">${r}</td></tr>`; }).join("") + "</tbody></table></div>" : "") +
+    `<p class="note">Names: <b>aosp</b> = an apksig constant, <b>observed</b> = measured samples (not AOSP). No value is read here; whether any scheme verifies is apksig's call (apkllm.signing), not this page's.</p>`;
+}
+
+// Build traces -------------------------------------------------------------
+function renderTraces() {
+  const t = report.traces;
+  const el = $("#traces-body");
+  if (!t.ok) {
+    el.innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${vis(t.error)}</span>` +
+      (t.file_sha256 ? `<dl class="kv" style="margin-top:8px"><dt>file sha256</dt><dd><code>${t.file_sha256}</code></dd></dl>` : "");
+    return;
+  }
+  const opt = (v) => v === null ? '<span class="pill na">absent</span>' : `<code>${vis(v)}</code>`;
+  const mf = t.manifest_main, meta = t.app_metadata, bad = Object.entries(t.unreadable);
+  el.innerHTML = `<dl class="kv">
+    <dt>file sha256</dt><dd><code>${t.file_sha256}</code></dd>
+    <dt>v1 signature files</dt><dd>${t.v1_signer_files_total ? t.v1_signer_files.map(f => `<code>${vis(f)}</code>`).join(" · ") + (t.v1_signer_files_total > t.v1_signer_files.length ? ` <span class="tiny">(${t.v1_signer_files.length} of ${t.v1_signer_files_total} listed)</span>` : "") : "none"} <span class="tiny">META-INF/…{.SF,.RSA,.DSA,.EC} — BNDLTOOL = bundletool, CERT = AGP's default</span></dd>
+    <dt>MANIFEST.MF Created-By</dt><dd>${mf ? opt(mf.created_by) : '<span class="pill na">no MANIFEST.MF</span>'}</dd>
+    <dt>MANIFEST.MF Built-By</dt><dd>${mf ? opt(mf.built_by) : '<span class="pill na">no MANIFEST.MF</span>'}${mf && !mf.main_section_complete ? ' <span class="tiny">main section continues past the 4 KiB head</span>' : ""}</dd>
+    <dt>AGP app-metadata</dt><dd>${meta === null ? '<span class="pill na">absent</span>' : Object.keys(meta).length ? Object.entries(meta).map(([k, v]) => `<code>${vis(k)}=${vis(v)}</code>`).join(" · ") : "present, no keys"}</dd>
+    <dt>unreadable</dt><dd>${bad.length ? bad.map(([n, e]) => `<code>${vis(n)}</code> <span class="tiny">${vis(e)}</span>`).join("<br>") : "none"}</dd>
+  </dl><p class="note">Read through each entry's own device reader, stopped after 4 KiB. app-metadata survives bundletool, so it does not tell a Play build from an AGP one.</p>`;
 }
 </script>
 </body>

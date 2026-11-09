@@ -37,7 +37,7 @@ const EXPECT_EXTRACT = {
 const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true, shortbad: true, tail: true, readers: true, many: true, bury: false, lfhlong: false };
 
 const m = await createApkllm();
-console.log("engine loaded; SCHEME_V2 =", m.SCHEME_V2.toString(16));
+console.log("engine loaded");
 
 let failures = 0;
 const fail = (msg) => { console.log("  FAIL:", msg); failures++; };
@@ -73,7 +73,7 @@ for (const path of TESTS) {
     if (dex) console.log("  first dex:", dex.name, "method=", dex.method, "gate=", dex.gate, "passes=", dex.passes);
   }
 
-  const heads = m.entryHeads(VFS, 8);
+  const heads = m.entryHeads(VFS, 8, null);
   console.log("  entryHeads ok=", heads.ok, heads.ok ? `entries=${heads.entries.length}` : `error=${heads.error}`);
   // both go through libziparchive's OpenArchive — they open or refuse together
   if (heads.ok !== gate.ok) fail(`entryHeads ok=${heads.ok} but installGate ok=${gate.ok}`);
@@ -101,21 +101,34 @@ for (const path of TESTS) {
     if (missing.ok) fail("extractEntry on a missing name returned ok");
   }
 
-  const sb = m.locateSigningBlock(VFS);
-  console.log("  locateSigningBlock ok=", sb.ok, sb.ok
-    ? `has_signing_block=${sb.has_signing_block} blocks=${(sb.scheme_blocks ?? []).map(b => "0x" + b.id.toString(16)).join(",") || "-"} eocd=${sb.eocd_offset}`
+  const sb = m.signingBlockPairs(VFS, 256, [0x7109871a, 0xf05368c0]);
+  console.log("  signingBlockPairs ok=", sb.ok, sb.ok
+    ? `framing_found=${sb.framing_found} pairs=${(sb.pairs ?? []).map(b => "0x" + b.id.toString(16)).join(",") || "-"} total=${sb.pairs_total ?? "-"}`
     : `error=${sb.error}`);
+  if (sb.ok && sb.framing_found) {
+    if (sb.pairs_total < sb.pairs.length) fail("pairs_total < listed pairs");
+    if (sb.tracked.length !== 2) fail("tracked is not one row per tracked ID");
+    for (const t of sb.tracked) { const k = sb.pairs.filter(p => p.id === t.id).length; if (sb.pairs_total === sb.pairs.length && t.count !== k) fail(`tracked 0x${t.id.toString(16)} count ${t.count} != ${k} listed`); }
+  }
+  const nm = m.entryNames(VFS, "META-INF/", [".SF", ".RSA", ".DSA", ".EC"], 64);
+  console.log("  entryNames ok=", nm.ok, nm.ok ? `total=${nm.total} ${JSON.stringify(nm.names.slice(0, 4))}` : `error=${nm.error}`);
+  // one direction only: the gate's full iteration can fail on an entry (Next: Inconsistent
+  // information) that a META-INF/ prefix walk never reaches (lfhlong) — native does the same
+  if (gate.ok && !nm.ok) fail(`entryNames ok=false but installGate opened it: ${nm.error}`);
+  if (nm.ok && gate.ok) {
+    const want = gate.entries.filter(e => e.name.startsWith("META-INF/") && [".SF", ".RSA", ".DSA", ".EC"].some(x => e.name.endsWith(x))).length;
+    if (nm.total !== want) fail(`entryNames total ${nm.total} != ${want} matching gate entries`);
+    const mf = m.entryHeads(VFS, 4096, ["META-INF/MANIFEST.MF"]);
+    if (!mf.ok || mf.entries.length !== gate.entries.filter(e => e.name === "META-INF/MANIFEST.MF").length) fail("entryHeads name filter: wrong entry set");
+  }
 
   const ts = m.tamperScan(VFS);
   console.log("  tamperScan ok=", ts.ok, ts.ok
     ? `cd_records=${ts.cd_records} would_open=${ts.libziparchive_would_open} findings=${ts.findings.length}${ts.findings.length ? " " + JSON.stringify(ts.findings.map(f => f.id)) : ""}`
     : `error=${ts.error}`);
   // both key on the ZIP tail (EOCD) — they find it or not together, at the same offset
-  if (ts.ok !== sb.ok) fail(`tamperScan ok=${ts.ok} but locateSigningBlock ok=${sb.ok}`);
-  if (ts.ok && sb.ok) {
-    if (ts.eocd_offset !== sb.eocd_offset) fail("tamperScan/locateSigningBlock eocd_offset differ");
-    if (ts.signing_block_present !== sb.has_signing_block) fail("signing_block_present disagree");
-  }
+  if (ts.ok !== sb.ok) fail(`tamperScan ok=${ts.ok} but signingBlockPairs ok=${sb.ok}`);
+  if (ts.ok && sb.ok && ts.signing_block_present !== sb.framing_found) fail("signing_block_present disagree");
   // the raw walker's prediction of the device reader must match what libziparchive did
   if (ts.ok && ts.libziparchive_would_open !== gate.ok) fail(`tamper predicts would_open=${ts.libziparchive_would_open} but installGate ok=${gate.ok}`);
   if (!ts.ok && gate.ok) fail("no ZIP tail for the raw walker, yet libziparchive opened it");
