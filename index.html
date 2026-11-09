@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "e032a52-1";
+window.__APKLLM_BUILD = "c2ecd69-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -1428,6 +1428,11 @@ const COPY = {
     for (const [key, label] of CERT_SCHEMES) { const sc = r[key]; if (sc === null) continue;
       head.push([label, `pair #${sc.first_entry} of ${sc.count} with this ID · ${sc.signers_total} signer(s), ${sc.signers.length} listed` +
         (sc.consumed ? "" : " · behind a failed gate — read by no AOSP verifier") + (sc.error ? " · " + sc.error : "")]);
+      for (const g of sc.signers) if (g.lineage) { const l = g.lineage;
+        head.push([`${label} signer #${g.index} lineage`, `${l.nodes_total} node(s), ${l.nodes.length} listed, ${l.attrs} attribute(s)` +
+          (l.version !== null && l.version !== 1 ? `, version ${l.version}` : "") +
+          (l.attr_errors.some(e => e !== null) ? " · attribute errors: " + l.attr_errors.map((e, i) => e === null ? "" : `#${i} ${e}`).filter(Boolean).join(", ") + " (never kept by apksig)" : l.error ? " · " + l.error : "") +
+          " · unverified"]); }
       for (const g of sc.signers) if (g.error || "min_sdk" in g || "signed_min_sdk" in g)
         head.push([`${label} signer #${g.index}`, ["min_sdk" in g ? `SDK ${g.min_sdk}–${g.max_sdk}` : "", "signed_min_sdk" in g ? `signed SDK ${g.signed_min_sdk}–${g.signed_max_sdk}` : "",
           g.error ? g.error + " — " + (SIGNER_ERR[g.error] ?? "") : "", g.certs_total > g.certs.length ? `${g.certs_total - g.certs.length} more certificates not listed` : ""].filter(Boolean).join(" · ")]);
@@ -1438,7 +1443,13 @@ const COPY = {
       f.signer_infos_total > f.signer_infos.length ? `${f.signer_infos_total - f.signer_infos.length} more SignerInfos not listed` : ""].filter(Boolean).join(" · ")]);
     const dn = (n) => n === null ? "" : n.display ?? ("(" + (n.jdk_rejects ?? n.error) + ")");
     const rows = [];
-    for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) g.certs.forEach((c, i) => rows.push([label, g.index, i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", c.error ?? c.jdk_rejects ?? g.error ?? ""]));
+    for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) {
+      g.certs.forEach((c, i) => rows.push([label, g.index, i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", c.error ?? c.jdk_rejects ?? g.error ?? ""]));
+      for (const n of g.lineage?.nodes ?? []) rows.push([label + " lineage", g.index, `node ${n.index} (attr ${n.attr})`,
+        n.cert ? dn(n.cert.subject) : "", n.cert ? dn(n.cert.issuer) : "", n.cert?.serial ?? "", n.cert?.sha256 ?? "", n.cert?.encoding ?? "",
+        [n.cert ? "" : "no certificate read", n.capabilities ? "claims: " + (n.capabilities.join(", ") || "none") : "", n.error ?? "",
+         g.lineage.attr_errors[n.attr] ? "attribute error: " + g.lineage.attr_errors[n.attr] : "", "unverified"].filter(Boolean).join(" · ")]);
+    }
     for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) if (!g.certs.length) rows.push([label, g.index, "", "", "", "", "", "", g.error ?? "no certificate read"]);
     const vname = (f) => "v1 " + f.name + (f.name_hex ? " [raw " + f.name_hex + "]" : "");
     const infos = [];
@@ -1597,7 +1608,31 @@ function certNotes(c) {
   if (c.trailing_bytes) n.push(`<span class="tiny">${c.trailing_bytes} trailing bytes</span>`);
   return n.join(" ");
 }
-const certRow = (label, i, c) => `<tr><td>${label}</td><td class="num">${i}</td><td>${dnCell(c.subject)}</td><td>${dnCell(c.issuer)}</td><td>${c.serial === null ? "—" : `<code>${vis(c.serial)}</code>`}</td><td><code title="${c.sha256}">${c.sha256.slice(0, 16)}…</code></td><td class="num">${c.size}</td><td>${certNotes(c)}</td></tr>`;
+const certRow = (label, i, c, attrs = "") => `<tr ${attrs}><td>${label}</td><td class="num">${i}</td><td>${dnCell(c.subject)}</td><td>${dnCell(c.issuer)}</td><td>${c.serial === null ? "—" : `<code>${vis(c.serial)}</code>`}</td><td><code title="${c.sha256}">${c.sha256.slice(0, 16)}…</code></td><td class="num">${c.size}</td><td>${certNotes(c)}</td></tr>`;
+// A proof-of-rotation lineage (apkllm #62), root (the oldest key) first — as encoded, nothing
+// verified: the capabilities are what each node CLAIMS, not rights apksig granted.
+function lineageRows(g, stamp) {
+  const l = g.lineage;
+  const failing = l.attr_errors.map((e, i) => e === null ? "" : `#${i} ${vis(e)}`).filter(Boolean);
+  const failShown = failing.length > 16 ? failing.slice(0, 16).concat([`… ${failing.length - 16} more`]) : failing;
+  const kept = stamp ? "concatenated in order, listed up to the node cap; apksig appends only those that parse and verify"
+                     : "the last listed; apksig keeps the last that parses and verifies, and a failing one adds an error to the signer";
+  const head = `<tr class="sep"><td colspan="8" class="tiny">signer #${g.index} · proof-of-rotation lineage as present, <b>unverified</b> — ${l.nodes_total} node${l.nodes_total === 1 ? "" : "s"}` +
+    `${l.nodes_total > l.nodes.length ? ` (${l.nodes.length} listed)` : ""}${l.attrs > 1 ? ` · ${l.attrs} attributes (${kept})` : ""}` +
+    `${l.version !== null && l.version !== 1 ? ` · version ${l.version} (apksig knows 1)` : ""}` +
+    (failing.length ? ` · <span class="pill warn">attribute error${failing.length > 1 ? "s" : ""}</span> ${failShown.join(", ")} <span class="tiny">(apksig never keeps such an attribute)</span>`
+                    : l.error ? ` <span class="pill warn">${vis(l.error)}</span>` : "") + `</td></tr>`;
+  const nodeTag = (n) => `data-node="${n.index}"`;
+  return [head, ...l.nodes.map(n => {
+    // the five named bits; any other bit is shown raw (it names nothing apksig knows)
+    const unknown = n.flags !== null && (n.flags & ~31) !== 0 ? ` (flags 0x${(n.flags >>> 0).toString(16)})` : "";
+    const caps = n.capabilities === null ? "" : (n.capabilities.length ? n.capabilities.join(", ") : "none") + unknown;
+    const root = l.nodes.find(x => x.attr === n.attr) === n;  // the first node of its attribute
+    const label = `↳ node ${n.index}${root ? " (root)" : ""}${l.attrs > 1 ? ` <span class="tiny">attr #${n.attr}${l.attr_errors[n.attr] !== null ? " ✗" : ""}</span>` : ""}` + (caps ? ` <span class="tiny">claims: ${caps}</span>` : "") +
+      (n.error ? ` <span class="pill warn">${vis(n.error)}</span>` : "");
+    return n.cert ? certRow(label, "—", n.cert, nodeTag(n)) : `<tr ${nodeTag(n)}><td>${label}</td><td colspan="7" class="tiny">no certificate read</td></tr>`;
+  })];
+}
 const CERT_HEAD = '<thead><tr><th>signer</th><th class="num">cert</th><th>subject</th><th>issuer</th><th>serial</th><th>sha256</th><th class="num">size</th><th>notes</th></tr></thead>';
 function renderCerts() {
   const r = report.certs;
@@ -1612,9 +1647,13 @@ function renderCerts() {
       const sdk = "min_sdk" in g ? ` <span class="tiny">SDK ${g.min_sdk}–${g.max_sdk}</span>` +
         (signedDiffers ? ` <span class="pill warn">signed ${g.signed_min_sdk}–${g.signed_max_sdk}</span> <span class="tiny">≠ the signer's (apksig rejects a mismatch)</span>` : "") : "";
       const who = `#${g.index}${sdk}` + (g.error ? ` <span class="pill warn">${esc(g.error)}</span> <span class="tiny">${SIGNER_ERR[g.error] ?? ""}</span>` : "");
-      const certs = g.certs.map((c, i) => certRow(who, i, c));
+      const tag = `data-signer="${key}:${g.index}"`;
+      const certs = g.certs.map((c, i) => certRow(who, i, c, tag));
       if (g.certs_total > g.certs.length) certs.push(`<tr><td colspan="8" class="tiny">signer #${g.index}: ${g.certs_total - g.certs.length} more certificates not listed</td></tr>`);
-      return certs.length ? certs : [`<tr><td>${who}</td><td colspan="7" class="tiny">no certificate read</td></tr>`];
+      // the signer keeps its own row whatever its lineage lists
+      if (!g.certs.length) certs.push(`<tr ${tag}><td>${who}</td><td colspan="7" class="tiny">no certificate read</td></tr>`);
+      if (g.lineage) certs.push(...lineageRows(g, key === "source_stamp"));
+      return certs;
     });
     parts.push(`<h3 class="certh">${label} <span class="tiny">pair #${sc.first_entry}${sc.count > 1 ? ` — ${sc.count} pairs of this ID, only the first is read` : ""} · ${sc.signers_total} signer${sc.signers_total === 1 ? "" : "s"}${sc.signers_total > sc.signers.length ? ` (${sc.signers.length} listed)` : ""}</span>${sc.consumed ? "" : ' <span class="pill warn">behind a failed gate — read by no AOSP verifier</span>'}${sc.error ? ` <span class="pill bad">${vis(sc.error)}</span>` : ""}</h3>` +
       `<div class="tablewrap"><table>${CERT_HEAD}<tbody>${rows.join("")}</tbody></table></div>`);

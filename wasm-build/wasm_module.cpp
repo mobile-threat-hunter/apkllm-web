@@ -550,6 +550,34 @@ val CertList(const std::vector<apkllm::CertAsPresent>& certs) {
     return l;
 }
 
+// A proof-of-rotation attribute as present (apkllm #62) — module.cpp LineageDict, key for key.
+val LineageObj(const apkllm::LineageAsPresent& l) {
+    val d = val::object();
+    d.set("attrs", l.attrs);
+    val attr_errors = val::array();
+    for (size_t i = 0; i < l.attr_errors.size(); ++i) attr_errors.set(i, OptStr(l.attr_errors[i]));
+    d.set("attr_errors", attr_errors);
+    d.set("version", l.version_read ? val(l.version) : val::null());
+    val nodes = val::array();
+    for (size_t i = 0; i < l.nodes.size(); ++i) {
+        const auto& n = l.nodes[i];
+        val x = val::object();
+        x.set("index", n.index);
+        x.set("attr", n.attr);
+        x.set("flags", n.flags_read ? val(n.flags) : val::null());
+        x.set("signed_sig_alg", n.signed_sig_alg_read ? val(n.signed_sig_alg) : val::null());
+        x.set("sig_alg", n.error.empty() ? val(n.sig_alg) : val::null());
+        x.set("signature_size", n.error.empty() ? val(Num(n.signature_size)) : val::null());
+        x.set("cert", n.cert_present ? CertObj(n.cert) : val::null());
+        x.set("error", OptStr(n.error));
+        nodes.set(i, x);
+    }
+    d.set("nodes", nodes);
+    d.set("nodes_total", Num(l.nodes_total));
+    d.set("error", OptStr(l.error));
+    return d;
+}
+
 val SchemeObj(const apkllm::SchemeResult& s) {
     if (!s.present) return val::null();
     val d = val::object();
@@ -571,6 +599,7 @@ val SchemeObj(const apkllm::SchemeResult& s) {
         }
         x.set("certs", CertList(g.certs));
         x.set("certs_total", Num(g.certs_total));
+        if (g.lineage.present) x.set("lineage", LineageObj(g.lineage));
         x.set("error", OptStr(g.error));
         signers.set(i, x);
     }
