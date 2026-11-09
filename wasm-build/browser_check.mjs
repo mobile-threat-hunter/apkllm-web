@@ -492,6 +492,12 @@ try {
       // every signer keeps a row (a certificate-less one too), and every listed lineage node has one
       signersOk: !r.ok || ["v2", "v3", "v31", "source_stamp"].every(k => (r[k]?.signers ?? []).every(g => body.querySelector('tr[data-signer="' + k + ':' + g.index + '"]'))),
       nodeRows: body.querySelectorAll("tr[data-node]").length,
+      // a ✗ marks exactly the listed nodes whose attribute failed (never one past the 16-attribute cap)
+      // the mismatch pill appears exactly for the lineages with attrs_mismatched > 0
+      pills: body.querySelectorAll("[data-leaf-mismatch]").length,
+      pillsWant: !r.ok ? 0 : ["v2", "v3", "v31", "source_stamp"].reduce((n, k) => n + (r[k]?.signers ?? []).filter(g => g.lineage && g.lineage.attrs_mismatched > 0).length, 0),
+      xMarks: [...body.querySelectorAll("tr[data-node]")].filter(tr => tr.firstElementChild.textContent.includes("✗")).length,
+      xWant: !r.ok ? 0 : ["v2", "v3", "v31", "source_stamp"].reduce((n, k) => n + (r[k]?.signers ?? []).reduce((m, g) => m + (g.lineage && g.lineage.attrs > 1 ? g.lineage.nodes.filter(x => x.attr_error !== null).length : 0), 0), 0),
       nodesListed: !r.ok ? 0 : ["v2", "v3", "v31", "source_stamp"].reduce((n, k) => n + (r[k]?.signers ?? []).reduce((m, g) => m + (g.lineage?.nodes.length ?? 0), 0), 0),
       // a value's own newline must not add a tooltip line: exactly one line per listed attribute
       tipLines: [...body.querySelectorAll("code[data-lines]")].every(e => e.title.split("\\n").length === Number(e.dataset.lines)) }); })()`));
@@ -503,6 +509,8 @@ try {
   if (!ct.tipLines) fail("a DN tooltip has more lines than attributes (a value forged a line)");
   if (!ct.signersOk) fail("a signer lost its own row in the certificate card");
   if (ct.nodeRows !== ct.nodesListed) fail(`${ct.nodeRows} lineage node rows ≠ ${ct.nodesListed} listed nodes`);
+  if (ct.pills !== ct.pillsWant) fail(`${ct.pills} mismatch pills ≠ ${ct.pillsWant} mismatching lineages`);
+  if (ct.xMarks !== ct.xWant) fail(`${ct.xMarks} ✗ marks ≠ ${ct.xWant} nodes of a failing attribute`);
   if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
     for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);

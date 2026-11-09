@@ -550,13 +550,22 @@ val CertList(const std::vector<apkllm::CertAsPresent>& certs) {
     return l;
 }
 
-// A proof-of-rotation attribute as present (apkllm #62) — module.cpp LineageDict, key for key.
+// A proof-of-rotation attribute as present (apkllm #62; capped per-attribute facts and the leaf
+// match, #65) — module.cpp LineageDict, key for key.
 val LineageObj(const apkllm::LineageAsPresent& l) {
     val d = val::object();
     d.set("attrs", l.attrs);
     val attr_errors = val::array();
     for (size_t i = 0; i < l.attr_errors.size(); ++i) attr_errors.set(i, OptStr(l.attr_errors[i]));
     d.set("attr_errors", attr_errors);
+    val leaf = val::array();
+    for (size_t i = 0; i < l.attr_leaf_matches.size(); ++i) {
+        int m = l.attr_leaf_matches[i];
+        leaf.set(i, m < 0 ? val::null() : val(m == 1));
+    }
+    d.set("attr_leaf_matches", leaf);
+    d.set("attrs_failed", l.attrs_failed);
+    d.set("attrs_mismatched", l.attrs_mismatched);
     d.set("version", l.version_read ? val(l.version) : val::null());
     val nodes = val::array();
     for (size_t i = 0; i < l.nodes.size(); ++i) {
@@ -564,6 +573,8 @@ val LineageObj(const apkllm::LineageAsPresent& l) {
         val x = val::object();
         x.set("index", n.index);
         x.set("attr", n.attr);
+        x.set("attr_error", OptStr(n.attr_error));
+        x.set("attr_leaf_match", n.attr_leaf_match < 0 ? val::null() : val(n.attr_leaf_match == 1));
         x.set("flags", n.flags_read ? val(n.flags) : val::null());
         x.set("signed_sig_alg", n.signed_sig_alg_read ? val(n.signed_sig_alg) : val::null());
         x.set("sig_alg", n.error.empty() ? val(n.sig_alg) : val::null());
