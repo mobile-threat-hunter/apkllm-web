@@ -9,7 +9,7 @@
 // Protocol (postMessage; each call carries an opaque `id` the worker echoes):
 //   main → worker: { id, type: "init",    buildSha: string }
 //                  { id, type: "load",    bytes: Uint8Array }
-//                      → { tamper, signing, content, input: {md5, sha256, size} }   (the manifest-independent reads)
+//                      → { tamper, signing, traces, content, input: {md5, sha256, size} }   (the manifest-independent reads)
 //                  { id, type: "gate",    extractNativeLibs: bool|null, targetSdk: number|null,
 //                                         pageSize: number, arscScope: bool|null }
 //                      → installGate(...) + checks[]      (re-run whenever the user changes an input)
@@ -78,7 +78,7 @@ function writeInput(bytes) {
   loaded = true;
 }
 
-// The three manifest-independent reads, once per load. entryHeads is bounded per
+// The manifest-independent reads, once per load. entryHeads is bounded per
 // entry (the engine stops each reader after HEAD_BYTES), so this is the whole
 // archive's worth of device-produced heads.
 let INPUT = null;   // { md5, sha256, size } of the loaded APK — names its {md5}.json report
@@ -88,12 +88,14 @@ async function load(bytes) {
   const D = self.ApkllmDomain;
   const tamper = Module.tamperScan(VFS);
   if (tamper.ok) tamper.checks = D.tamperChecks(tamper);
-  const signing = Module.locateSigningBlock(VFS);
-  const heads = Module.entryHeads(VFS, D.HEAD_BYTES);
+  const signing = D.signingBlock(Module.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS));
+  const traces = D.buildTraces(INPUT.sha256, Module.entryNames(VFS, "META-INF/", D.V1_SIG_EXT, D.TRACE_LIST_CAP),
+                               Module.entryHeads(VFS, D.TRACE_HEAD, [D.MANIFEST, D.APP_METADATA]));
+  const heads = Module.entryHeads(VFS, D.HEAD_BYTES, null);
   const content = D.contentMap(heads, D.HEAD_BYTES);
   // the raw device-produced heads ride along (parallel to content.entries) for the hex view
   if (content.ok) content.heads = heads.entries.map(h => ({ name: h.name, disposition: h.disposition, complete: h.complete, head: h.head }));
-  return { tamper, signing, content, input: INPUT };
+  return { tamper, signing, traces, content, input: INPUT };
 }
 
 function gate(p) {
@@ -421,7 +423,7 @@ async function handle(e, cancelAt) {
     if (type === "init") {
       BUILD_SHA = e.data.buildSha || "";
       await ensureInit();
-      self.postMessage({ id, ok: true, result: { schemeV2: Module.SCHEME_V2 } });
+      self.postMessage({ id, ok: true, result: {} });
       return;
     }
     await ensureInit();

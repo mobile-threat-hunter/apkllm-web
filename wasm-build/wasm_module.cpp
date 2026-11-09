@@ -13,10 +13,11 @@
 //               pageSize: number, arscScope: boolean|null)
 //   extractEntry(path, name, maxBytes)      // name: string, or Uint8Array of raw bytes (name_hex)
 //                                           // .data is a Uint8Array copy
-//   entryHeads(path, n)                     // each .head is a Uint8Array copy
-//   locateSigningBlock(path)
+//   entryHeads(path, n, names: string[]|null) // each .head is a Uint8Array copy
+//   entryNames(path, prefix, suffixes: string[], cap)
+//   signingBlockPairs(path, cap, track: number[])
 //   tamperScan(path)
-//   SCHEME_V2 / SCHEME_V3 / SCHEME_V31 / SCHEME_SOURCE_STAMP (constants)
+// (embind checks the argument count: every argument is passed, null for Python's None default.)
 //
 // Differences forced by the JS side, none of them policy:
 //   - Python None ⇄ JS null/undefined for the tri-state inputs and outputs.
@@ -49,7 +50,6 @@
 #include "container.h"
 #include "tamper.h"
 
-using emscripten::constant;
 using emscripten::function;
 using emscripten::typed_memory_view;
 using emscripten::val;
@@ -277,11 +277,24 @@ val ExtractEntry(const std::string& path, val name, double max_bytes) {
     return out;
 }
 
+// A JS array of strings → std::vector<std::string> (each encoded UTF-8, as pybind11 casts a str).
+std::vector<std::string> StringVector(const val& arr) {
+    std::vector<std::string> v;
+    const unsigned n = arr["length"].as<unsigned>();
+    v.reserve(n);
+    for (unsigned i = 0; i < n; ++i) v.push_back(arr[i].as<std::string>());
+    return v;
+}
+
 // Every entry's first n device-produced bytes (one archive open). Bytes only — JS labels them.
-val EntryHeads(const std::string& path, double n) {
+// names=null: every entry; an array: only those exact names (libziparchive's own matcher).
+val EntryHeads(const std::string& path, double n, val names) {
     val out = val::object();
     size_t want = n > 0 ? static_cast<size_t>(n) : 0;
-    apkllm::EntryHeads r = apkllm::ReadEntryHeads(path, want);
+    std::vector<std::string> only;
+    const bool filtered = !IsNone(names);
+    if (filtered) only = StringVector(names);
+    apkllm::EntryHeads r = apkllm::ReadEntryHeads(path, want, filtered ? &only : nullptr);
     out.set("ok", r.ok);
     if (!r.ok) {
         out.set("error", SafeStr(r.error));
@@ -307,53 +320,87 @@ val EntryHeads(const std::string& path, double n) {
     return out;
 }
 
-// Locate the EOCD + APK Signing Block and enumerate scheme blocks — structural
-// location only (verification is Java apksig, out of the web demo's scope).
-val LocateSigningBlock(const std::string& path) {
+// Entry names under `prefix`, as libziparchive iterates them: the first `cap` + the exact total.
+val EntryNames(const std::string& path, const std::string& prefix, val suffixes, double cap) {
+    val out = val::object();
+    size_t keep = cap > 0 ? static_cast<size_t>(cap) : 0;
+    apkllm::EntryNames r = apkllm::ListEntryNames(path, prefix, StringVector(suffixes), keep);
+    out.set("ok", r.ok);
+    if (!r.ok) {
+        out.set("error", SafeStr(r.error));
+        return out;
+    }
+    val names = val::array();
+    for (size_t i = 0; i < r.names.size(); ++i) names.set(i, SafeStr(r.names[i]));
+    out.set("names", names);
+    out.set("total", Num(r.total));
+    return out;
+}
+
+// The APK Signing Block's ID→value pairs, in block order (duplicates kept), as the locator walks
+// them: the first `cap` pairs {id, offset (file offset of the value), size} + the exact total, and
+// for each `track` ID its whole-walk count + first pair. No value is read or parsed — structural
+// only (verification is Java apksig, out of the web demo's scope).
+val SigningBlockPairs(const std::string& path, double cap, val track) {
     val out = val::object();
     std::string err;
     auto apk = apkllm::ApkFile::open(path, &err);
     if (!apk) {
         out.set("ok", false);
-        out.set("error", err);
+        out.set("error", SafeStr(err));
         return out;
     }
-    out.set("file_size", Num(apk->size()));
-
     auto sections = apkllm::FindZipSections(apk->data(), apk->size());
     if (!sections) {
         out.set("ok", false);
-        out.set("is_zip", false);
-        out.set("error", std::string("no EOCD record — not a ZIP/APK"));
-        return out;
-    }
-    out.set("is_zip", true);
-    out.set("eocd_offset", Num(sections->eocd_offset));
-    out.set("central_dir_offset", Num(sections->central_dir_offset));
-    out.set("central_dir_size", Num(sections->central_dir_size));
-    out.set("zip64_locator_present", sections->zip64_locator_present);
-
-    auto sb = apkllm::FindApkSigningBlock(apk->data(), apk->size(), *sections);
-    out.set("has_signing_block", sb.found);
-    if (!sb.found) {
-        out.set("ok", true);  // structurally parsed; v2+ block simply absent/invalid
-        out.set("signing_block_error", sb.error);
+        out.set("error", std::string("ZIP End of Central Directory record not found"));  // apksig ApkUtilsLite wording
         return out;
     }
     out.set("ok", true);
-    out.set("signing_block_offset", Num(sb.block_offset));
-    out.set("signing_block_size", Num(sb.block_size));
-
-    val blocks = val::array();
-    size_t i = 0;
-    for (const auto& b : sb.blocks) {
+    // The two gates both AOSP readers apply before locating the block (module.cpp: the CD must
+    // be immediately followed by the EOCD; the platform refuses ZIP64).
+    out.set("cd_contiguous",
+            sections->central_dir_offset + sections->central_dir_size == sections->eocd_offset);
+    out.set("zip64_locator_present", sections->zip64_locator_present);
+    std::vector<uint32_t> ids;
+    const unsigned nt = track["length"].as<unsigned>();
+    for (unsigned i = 0; i < nt; ++i) ids.push_back(track[i].as<uint32_t>());
+    size_t keep = cap > 0 ? static_cast<size_t>(cap) : 0;
+    auto sb = apkllm::FindApkSigningBlock(apk->data(), apk->size(), *sections, keep, &ids);
+    out.set("framing_found", sb.framing_found);
+    if (!sb.framing_found) {
+        out.set("error", SafeStr(sb.error));
+        return out;
+    }
+    if (sb.pairs_error_entry > 0) {
+        out.set("malformed_entry", sb.pairs_error_entry);
+        out.set("malformed_reason", SafeStr(sb.pairs_error));
+    }
+    out.set("block_offset", Num(sb.block_offset));
+    out.set("block_size", Num(sb.block_size));
+    val pairs = val::array();
+    for (size_t i = 0; i < sb.blocks.size(); ++i) {
+        const auto& b = sb.blocks[i];
         val d = val::object();
         d.set("id", b.id);
-        d.set("value_offset", Num(b.value_offset));
-        d.set("value_size", Num(b.value_size));
-        blocks.set(i++, d);
+        d.set("offset", Num(b.value_offset));
+        d.set("size", Num(b.value_size));
+        pairs.set(i, d);
     }
-    out.set("scheme_blocks", blocks);
+    out.set("pairs", pairs);
+    out.set("pairs_total", Num(sb.blocks_total));
+    val tracked = val::array();
+    for (size_t i = 0; i < sb.tracked.size(); ++i) {
+        const auto& t = sb.tracked[i];
+        val d = val::object();
+        d.set("id", t.id);
+        d.set("count", Num(t.count));
+        d.set("first_entry", t.first_entry);
+        d.set("first_offset", Num(t.first_value_offset));
+        d.set("first_size", Num(t.first_value_size));
+        tracked.set(i, d);
+    }
+    out.set("tracked", tracked);
     return out;
 }
 
@@ -416,13 +463,10 @@ val TamperScan(const std::string& path) {
 }  // namespace
 
 EMSCRIPTEN_BINDINGS(apkllm_wasm) {
-    constant("SCHEME_V2", static_cast<uint32_t>(apkllm::SchemeBlockId::kV2));
-    constant("SCHEME_V3", static_cast<uint32_t>(apkllm::SchemeBlockId::kV3));
-    constant("SCHEME_V31", static_cast<uint32_t>(apkllm::SchemeBlockId::kV31));
-    constant("SCHEME_SOURCE_STAMP", static_cast<uint32_t>(apkllm::SchemeBlockId::kSourceStamp));
-    function("locateSigningBlock", &LocateSigningBlock);
     function("installGate", &InstallGate);
     function("extractEntry", &ExtractEntry);
     function("entryHeads", &EntryHeads);
+    function("entryNames", &EntryNames);
+    function("signingBlockPairs", &SigningBlockPairs);
     function("tamperScan", &TamperScan);
 }

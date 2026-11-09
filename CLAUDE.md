@@ -5,7 +5,7 @@ apkllm(APK 컨테이너/압축 해제 분석 라이브러리)의 기능을 브�
 - 소스 라이브러리: `/home/nyahumi/Project/apkllm`
 - 참조 구현: `/home/nyahumi/Project/dexllm-web` — dexllm을 WASM으로 빌드해 정적 페이지(index.html + dexllm.js/dexllm.wasm)로 띄운 구조를 그대로 따를 것
 - dexllm-web 교훈: WASM은 **단일 스레드로 빌드**해야 함 (멀티스레드 빌드 시 파일 로드 실패)
-- 데모 범위(확정): **컨테이너 레이어만** — C++ libziparchive 기반 install_gate / extract_map / tamper_scan / content(entry_heads)를 WASM으로. 서명(Java apksig)·언랩(Python)은 범위 밖.
+- 데모 범위(확정): **컨테이너 레이어만** — C++ libziparchive 기반 install_gate / extract_map / tamper_scan / content(entry_heads) + 구조적 서명 읽기(signing_block = signing_block_pairs, build_traces = entry_names + entry_heads(names))를 WASM으로. 서명 검증(Java apksig)·언랩(Python)은 범위 밖.
 
 ## 검증 게이트 (`.claude/` — apkllm/dexllm에서 선별 상속)
 

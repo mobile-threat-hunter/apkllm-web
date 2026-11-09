@@ -3,7 +3,7 @@
 apkllm's **container layer** compiled to WebAssembly for the apkllm-web demo: real AOSP
 `system/libziparchive` (+ libbase / libutils / liblog / libcutils / incfs host deps,
 same source lists as `apkllm/CMakeLists.txt`) and apkllm's `native/container` +
-`native/apksig` (structural EOCD / signing-block locator + tamper scan). Nothing is
+`native/apksig` (structural EOCD / signing-block pair walk + tamper scan). Nothing is
 forked — every engine source is pulled from the apkllm / AOSP checkouts at configure
 time; this directory owns only the build recipe, a one-header musl shim, and the
 embind glue.
@@ -43,7 +43,10 @@ combinations) field by field, including the `checks[]` reasons `domain.js` repro
 Python (a check's `detail` list compared in order: both sides keep the first 20 in raw-name byte
 order, #49 — libziparchive's own iteration order is `std::hash` order, which differs between
 wasm32 and x86_64, so `exceptions` / entry rows are compared by name), and runs `extract_entry` on every entry on both sides — keyed `x:<name_hex>` (raw bytes) for a lossy name, else `s:<name>` (sha256 of the
-device-faithful bytes, or the identical rejection error).
+device-faithful bytes, or the identical rejection error). It also compares `signing_block` exactly
+and `build_traces` with its attacker-keyed dicts sorted (a JS object puts integer-like keys
+first); past build_traces' 64-name cap WHICH v1 signer files are kept follows the same hash order,
+so there only the total and the count are compared.
 
 ## Layout
 
@@ -53,11 +56,12 @@ device-faithful bytes, or the identical rejection error).
 - `shim/include/sys/cdefs.h` — the only header musl lacks that AOSP includes
   (`__BEGIN_DECLS`); same shim axmlllm-web uses.
 - `wasm_module.cpp` — embind functions mirroring `apkllm/native/binding/module.cpp`
-  one-to-one (`installGate`, `extractEntry`, `entryHeads`, `locateSigningBlock`,
-  `tamperScan`; same field names incl. `name_hex` / `entry_hex` for a name that is not strict
+  one-to-one (`installGate`, `extractEntry`, `entryHeads` (+ the `names` filter), `entryNames`,
+  `signingBlockPairs`, `tamperScan`; same field names incl. `name_hex` / `entry_hex` for a name that is not strict
   UTF-8, Python `None` ⇄ JS `null`; `extractEntry` takes the name as a string or, for a lossy
-  name, a `Uint8Array` of its raw bytes — Python's `bytes`).
-- `smoke.mjs` — node smoke test; self-consistency across the five functions. Ground
+  name, a `Uint8Array` of its raw bytes — Python's `bytes`; embind checks the argument count, so
+  every argument is passed, `null` where Python takes its `None` default).
+- `smoke.mjs` — node smoke test; self-consistency across the six functions. Ground
   truth is the native binding on the same files:
   `cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -c 'import sys; sys.path.insert(0,"build/dev"); import _apk_core as c; print(c.install_gate(PATH, arsc_scope=None)["entry_count"])'`
 - `tamper_fixtures.py` — synthesizes the fixtures: dup-name / Janus / CD-method-forged
@@ -71,6 +75,11 @@ device-faithful bytes, or the identical rejection error).
   for the md5-named downloads and the copy TSV; `lossy` / `lossydup` (#40: names that are not
   strict UTF-8), and `many` (#49: > 20 items in every check `detail` list — the cap, `<key>_count` /
   `_cut` and the kept items, in raw-name byte order on both sides), `bury` (a Master-Key duplicate after 21 per-entry findings) and `lfhlong` (a kept finding's `detail` quoting 700-byte names, cut head + `…` + tail at 512 code points, an astral char at the head's last code point). `smoke.mjs` asserts the expected findings / `would_open` per fixture name.
+  Signing-side fixtures: `sigpairs` (duplicate v2 / unknown IDs, observed IDs, nested and
+  wrong-case v1 files, a MANIFEST.MF read by apksig's rules — blank lead lines, continuation,
+  CRLF / CR, a dotless-i `Built-By` —, hostile app-metadata keys), `sigbad` (a malformed pair after
+  a valid one + a forged-method MANIFEST.MF), `sigcut` (300 pairs, the only v2 at #290), `sigsplit`
+  (junk between CD and EOCD), `mfcut` (a main section past the 4 KiB head), `v1many` (70 v1 files).
 - `xcheck.py` / `xcheck.mjs` — native-vs-wasm field-by-field comparison (above).
 - `browser_check.mjs` — serves the repo root, drives `index.html` over CDP, feeds an
   APK through the file input and asserts every panel rendered; on the Extract tab it runs

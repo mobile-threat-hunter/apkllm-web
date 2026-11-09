@@ -656,6 +656,183 @@ function extractReport(g) {
            entry_count: entries.length, summary, checks, entries };
 }
 
+// ── container.signing_block ───────────────────────────────────────────────
+// The APK Signing Block's pair IDs apkllm can name (container._PAIR_NAMES, same order — the
+// native `tracked` list and so `named` follow it). AOSP IDs are the apksig constants; the two
+// "observed" IDs come from measured samples (apkllm #25), not from AOSP.
+const PAIR_NAMES = new Map([
+  [0x7109871a, ["v2", "aosp"]],
+  [0xf05368c0, ["v3", "aosp"]],
+  [0x1b93ad61, ["v31", "aosp"]],
+  [0x2b09189e, ["source_stamp_v1", "aosp"]],
+  [0x6dff800d, ["source_stamp_v2", "aosp"]],
+  [0x42726577, ["verity_padding", "aosp"]],
+  [0x2146444e, ["play_frosting", "observed"]],
+  [0x504b4453, ["agp_dependency_info", "observed"]],
+]);
+const PAIR_IDS = [...PAIR_NAMES.keys()];
+const PAIRS_CAP = 256;   // container._PAIRS_CAP: pairs listed per call (+ the exact total)
+const idHex = (id) => "0x" + (id >>> 0).toString(16).padStart(8, "0");
+
+// signing_block(path) over the engine's signingBlockPairs(path, PAIRS_CAP, PAIR_IDS).
+function signingBlock(r) {
+  if (!r.ok) return r;
+  const gates = { cd_contiguous: r.cd_contiguous, zip64_locator_present: r.zip64_locator_present };
+  if (!r.framing_found) return { ok: true, found: false, reason: r.error ?? "", ...gates };
+  const walk_error = "malformed_entry" in r ? { entry: r.malformed_entry, reason: r.malformed_reason } : null;
+  const pairs = [], seen = new Map();
+  for (const p of r.pairs) {
+    const [name, source] = PAIR_NAMES.get(p.id) ?? [null, null];
+    pairs.push({ id: p.id, id_hex: idHex(p.id), name, name_source: source, offset: p.offset, size: p.size });
+    seen.set(p.id, (seen.get(p.id) ?? 0) + 1);
+  }
+  const named = {}, dups = new Set();
+  for (const t of r.tracked) {
+    if (t.count === 0) continue;
+    named[PAIR_NAMES.get(t.id)[0]] = { id_hex: idHex(t.id), count: t.count, first_entry: t.first_entry,
+                                       first_offset: t.first_offset, first_size: t.first_size };
+    if (t.count > 1) dups.add(idHex(t.id));
+  }
+  for (const [id, n] of seen) if (n > 1 && !PAIR_NAMES.has(id)) dups.add(idHex(id));
+  return {
+    ok: true, found: true, ...gates,
+    block_offset: r.block_offset, block_size: r.block_size,
+    walk_error, pairs, pairs_total: r.pairs_total, pairs_cut: r.pairs_total - pairs.length,
+    named, duplicate_ids: [...dups].sort(),
+    unknown_ids: [...new Set(pairs.filter(x => x.name === null).map(x => x.id_hex))].sort(),
+  };
+}
+
+// ── container.build_traces ────────────────────────────────────────────────
+const MANIFEST = "META-INF/MANIFEST.MF";
+const APP_METADATA = "META-INF/com/android/build/gradle/app-metadata.properties";
+// AOSP: tools/apksig/.../v1/V1SchemeVerifier.java:232-251 (any META-INF/ entry ending so)
+const V1_SIG_EXT = [".SF", ".RSA", ".DSA", ".EC"];
+const TRACE_HEAD = 4096, TRACE_LIST_CAP = 64, TRACE_VALUE_CUT = 256;
+
+// Python's ordering and slicing are by code point, JS's by UTF-16 unit — every cut / sort here
+// goes through code points.
+const cpSlice = (s, a, b) => Array.from(s).slice(a, b).join("");
+function cpCmp(a, b) {
+  const A = Array.from(a), B = Array.from(b);
+  for (let i = 0; i < Math.min(A.length, B.length); i++) {
+    const x = A[i].codePointAt(0), y = B[i].codePointAt(0);
+    if (x !== y) return x - y;
+  }
+  return A.length - B.length;
+}
+// str.strip(): Python's whitespace (str.isspace) — not JS trim's (no U+FEFF; adds \x1c-\x1f, U+0085)
+const PY_WS = "\\t\\n\\v\\f\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const PY_STRIP = new RegExp(`^[${PY_WS}]+|[${PY_WS}]+$`, "g");
+const pyStrip = (s) => s.replace(PY_STRIP, "");
+const text = (b) => utf8lenient.decode(b);   // _text: bytes.decode("utf-8", "replace")
+const endsCRLF = (b) => b.length > 0 && (b[b.length - 1] === 0x0a || b[b.length - 1] === 0x0d);
+
+// _manifest_lines: apksig ManifestParser.readLine — CRLF, CR or LF (ManifestParser.java:218-251)
+function manifestLines(data) {
+  const out = [], n = data.length;
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j < n && data[j] !== 0x0d && data[j] !== 0x0a) j++;
+    out.push(data.subarray(i, j));
+    if (j < n && data[j] === 0x0d && j + 1 < n && data[j + 1] === 0x0a) j++;
+    i = j + 1;
+  }
+  return out;
+}
+const concat = (a, b) => { const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); return c; };
+
+// _java_equals_ignore_case: Java String.equalsIgnoreCase (lengths in UTF-16 units, per-char
+// toUpperCase then toLowerCase of that; U+0130 lowers to 'i' as in Java).
+function javaEqualsIgnoreCase(a, b) {
+  const A = Array.from(a), B = Array.from(b);
+  if (a.length !== b.length || A.length !== B.length) return false;
+  const up = (c) => { const u = c.toUpperCase(); return Array.from(u).length === 1 ? u : c; };
+  const lo = (c) => { if (c === "İ") return "i"; const x = c.toLowerCase(); return Array.from(x).length === 1 ? x : c; };
+  for (let k = 0; k < A.length; k++) {
+    const x = A[k], y = B[k];
+    if (x === y) continue;
+    const ux = up(x), uy = up(y);
+    if (ux !== uy && lo(ux) !== lo(uy)) return false;
+  }
+  return true;
+}
+
+// _manifest_main: Created-By / Built-By from the main section, read with apksig's rules
+// (ManifestParser.java:72-115, :140-200, :354-360); `whole` = head is the entire entry.
+function manifestMain(head, whole) {
+  const lines = manifestLines(head);
+  let tail = null;
+  if (!whole && lines.length && !endsCRLF(head)) tail = lines.pop();
+  let k = 0;
+  while (k < lines.length && lines[k].length === 0) k++;
+  let raw = [], ended = false;
+  for (const line of lines.slice(k)) {
+    if (line.length === 0) { ended = true; break; }
+    if (line[0] === 0x20 && raw.length) raw[raw.length - 1] = concat(raw[raw.length - 1], line.subarray(1));
+    else raw.push(line);
+  }
+  const complete = ended || whole;
+  if (!complete && raw.length && (tail === null || tail[0] === 0x20)) raw = raw.slice(0, -1);
+  const attrs = raw.map(a => {
+    let s = -1;
+    for (let i = 0; i + 1 < a.length; i++) if (a[i] === 0x3a && a[i + 1] === 0x20) { s = i; break; }
+    return s < 0 ? [text(a), ""] : [text(a.subarray(0, s)), text(a.subarray(s + 2))];
+  });
+  const first = (name) => { for (const [k_, v] of attrs) if (javaEqualsIgnoreCase(k_, name)) return cpSlice(v, 0, TRACE_VALUE_CUT); return null; };
+  return { created_by: first("created-by"), built_by: first("built-by"), main_section_complete: complete };
+}
+
+// _properties: plain key=value lines; a line cut by the head is dropped. Null-prototype object so
+// an attacker key like "__proto__" is a key, not a prototype swap. Known display-only difference: a JS
+// object lists integer-like keys ("2", "10") first in ascending order, Python's dict in file order —
+// same keys and values (xcheck compares this dict sorted).
+function properties(head, whole) {
+  let lines = manifestLines(head).map(text);
+  if (!whole && lines.length && !endsCRLF(head)) lines = lines.slice(0, -1);
+  const out = new Map();
+  for (let line of lines) {
+    line = pyStrip(line);
+    if (!line || line[0] === "#" || line[0] === "!" || !line.includes("=")) continue;
+    const at = line.indexOf("=");
+    if (out.size >= TRACE_LIST_CAP) break;
+    out.set(cpSlice(pyStrip(line.slice(0, at)), 0, TRACE_VALUE_CUT), cpSlice(pyStrip(line.slice(at + 1)), 0, TRACE_VALUE_CUT));
+  }
+  return Object.assign(Object.create(null), Object.fromEntries(out));
+}
+
+// _cut_middle: a long name keeps head + tail (the .SF / .RSA suffix is what matters)
+function cutMiddle(name) {
+  const cp = Array.from(name);
+  if (cp.length <= TRACE_VALUE_CUT) return name;
+  const half = (TRACE_VALUE_CUT - 1) >> 1;
+  return cp.slice(0, half).join("") + "…" + cp.slice(cp.length - half).join("");
+}
+
+// build_traces(path) over the engine's entryNames(path, "META-INF/", V1_SIG_EXT, TRACE_LIST_CAP)
+// and entryHeads(path, TRACE_HEAD, [MANIFEST, APP_METADATA]); sha256 = the whole input file's.
+function buildTraces(sha256, names, heads) {
+  if (!names.ok) return { ok: false, error: names.error, file_sha256: sha256 };
+  const files = names.names.map(n => cutMiddle(n.slice("META-INF/".length))).sort(cpCmp);
+  if (!heads.ok) return { ok: false, error: heads.error, file_sha256: sha256 };
+  const byName = new Map(heads.entries.map(e => [e.name, e]));
+  const unreadable = Object.create(null);
+  for (const [n, e] of byName) if ("error" in e) unreadable[n] = e.error;
+  const mf = byName.get(MANIFEST), meta = byName.get(APP_METADATA);
+  // `complete` = the reader finished (size validated), not that the head holds it all
+  const whole = (e) => Boolean(e.complete) && e.head.length === e.uncompressed_size;
+  return {
+    ok: true, file_sha256: sha256,
+    v1_signer_files: files, v1_signer_files_total: names.total,
+    manifest_main: mf !== undefined && !("error" in mf) ? manifestMain(mf.head, whole(mf)) : null,
+    app_metadata: meta !== undefined && !("error" in meta) ? properties(meta.head, whole(meta)) : null,
+    unreadable,
+  };
+}
+
 root.ApkllmDomain = { HEAD_BYTES, SIGNATURES, CATEGORY, classify, unknownKind, entropy,
-                      contentMap, containerChecks, tamperChecks, READER, extractReport };
+                      contentMap, containerChecks, tamperChecks, READER, extractReport,
+                      PAIR_NAMES, PAIR_IDS, PAIRS_CAP, signingBlock,
+                      MANIFEST, APP_METADATA, V1_SIG_EXT, TRACE_HEAD, TRACE_LIST_CAP, buildTraces };
 })(typeof self !== "undefined" ? self : globalThis);

@@ -2,8 +2,8 @@
 
 [apkllm](https://github.com/mobile-threat-hunter/apk-analyzer-for-llm)'s **container layer** running in
 the browser: real AOSP `system/libziparchive` (the device's own ZIP reader) compiled to
-WebAssembly, plus apkllm's install-gate, content-typing and present-vs-consumed tamper
-scan over it. Drop an APK and see what the device would consume — nothing is uploaded.
+WebAssembly, plus apkllm's install-gate, content-typing, present-vs-consumed tamper
+scan and the structural signing-side reads (APK Signing Block pairs, build traces) over it. Drop an APK and see what the device would consume — nothing is uploaded.
 
 **Live:** <https://mobile-threat-hunter.github.io/apkllm-web/>
 
@@ -19,7 +19,7 @@ Same structure as [dexllm-web](https://github.com/mobile-threat-hunter/dexllm-we
 | **Content** | `entryHeads` — each entry's first 512 bytes as its *own device reader* produces them (inflate / stored / lenient raw) | `magic.classify` + `container.content_map` (type by magic, role / extension mismatch) |
 | **Images** | `extractEntry` — every entry that is an image by magic (whatever its name), rendered lazily from its own reader's bytes; width × height is read from the header first (PNG, GIF, BMP, ICO, WebP, JPEG) and a bitmap over 24 Mpx is decoded only on request in the viewer | Content's `classify` + `extension_mismatch` (MIME from magic, never from the name) |
 | **Tamper scan** | `tamperScan` — an own raw ZIP walk (not libziparchive) reporting where what is *present* diverges from what the device *consumes*: CD↔LFH mismatch, duplicate names, method forgery, Janus, second EOCD | `container._tamper_checks` |
-| **Signing block** | `locateSigningBlock` — EOCD / central directory / APK Signing Block location and scheme block ids (structural only) | — |
+| **Signing** | `signingBlockPairs` — the APK Signing Block's ID→value pairs in block order (duplicates kept; first 256 + exact total, whole-walk count + first pair per named ID; no value read) and the two gates both AOSP readers apply first (CD contiguous with the EOCD, no ZIP64). `entryNames` + `entryHeads(names)` — the v1 signature files under `META-INF/`, `MANIFEST.MF` and AGP's `app-metadata.properties` through their own device readers (4 KiB heads) | `container.signing_block` (pair names: apksig constants or observed IDs, duplicate / unknown IDs, which copy of an ID apksig reads, a malformed pair stopping the walk) + `container.build_traces` (v1 signer files, `Created-By` / `Built-By` by apksig's manifest rules, app-metadata keys — attacker-writable hints, never evidence) |
 
 **Copy.** As in dexllm-web, every card has a **⧉ copy** button that copies its whole
 dataset as tab-separated text (every entry, not just the filtered view); clicking an entry
@@ -64,7 +64,9 @@ extracted bytes); dropping another file (or **cancel**) stops a running bundle. 
 content *name* (apkllm's choice), sha256 beside it tells an md5 collision from identical
 content (a pure-JS SHA-256 stands in where WebCrypto is unavailable, e.g. a plain-http origin).
 
-Out of scope: signature verification (Java apksig in apkllm) and unwrap (Python).
+Out of scope: signature verification (Java apksig in apkllm: whether a scheme verifies, signer
+identity, platform_view's device-reject rules) and unwrap (Python). The Signing tab shows only
+what the container holds.
 
 ## Build & verify
 

@@ -453,8 +453,33 @@ try {
     if (await evalJs(`document.querySelector("#imgview").classList.contains("on")`)) fail("image viewer stayed open during a new load");
     await waitFor(`reportGen === loadGen && document.querySelector("#app").classList.contains("on")`);
   }
-  if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" before .png = the Extract / Images tab
-    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")]]) {
+  // Signing tab: the pair table is the report's pairs (one row each, a later copy of an ID marked),
+  // the badge is the pair count, build traces name the input's own sha256, and both cards copy
+  const sg = JSON.parse(await evalJs(`(() => { const s = report.signing, t = report.traces;
+    return JSON.stringify({ ok: s.ok, found: s.found, pairs: s.found ? s.pairs.length : 0, total: s.pairs_total,
+      rows: document.querySelectorAll("#signing-body tbody tr").length,
+      later: document.querySelectorAll("#signing-body tbody tr.fail").length,
+      dupNamed: s.found ? Object.values(s.named).reduce((n, x) => n + Math.min(x.count, s.pairs.length) - 1, 0) : 0,
+      badge: document.querySelector("#n-signing").textContent, warn: document.querySelector("#n-signing").classList.contains("warn"),
+      walk: !!(s.found && s.walk_error), gate: !!(s.found && (!s.cd_contiguous || s.zip64_locator_present)), dups: s.found ? s.duplicate_ids.length : 0,
+      tok: t.ok, sha: t.file_sha256, input: report.input.sha256, tbody: document.querySelector("#traces-body").textContent,
+      copyS: COPY.signing(), copyT: COPY.traces(),
+      raw: ["#signing-body", "#traces-body"].some(q => new RegExp(INVIS_RE.source).test(document.querySelector(q).textContent.replace(/[\\t\\n\\r]/g, ""))) || [COPY.signing(), COPY.traces()].some(x => new RegExp(INVIS_RE.source).test(x.replace(/[\\t\\n\\r]/g, ""))) }); })()`));
+  console.log("signing:", JSON.stringify({ ...sg, tbody: sg.tbody.slice(0, 100), copyS: sg.copyS.length, copyT: sg.copyT.length }));
+  const COPYS_GATED = (x) => !/the one apksig reads/.test(x.copyS);
+  if (sg.ok && sg.found) {
+    if (sg.rows !== sg.pairs) fail(`signing table ${sg.rows} rows ≠ ${sg.pairs} pairs`);
+    if (sg.badge !== String(sg.total)) fail(`signing badge ${sg.badge} ≠ ${sg.total} pairs`);
+    if (sg.warn !== (sg.walk || sg.dups > 0 || sg.gate)) fail("signing badge colour does not follow walk_error / duplicate_ids / the gates");
+    if (sg.gate && !COPYS_GATED(sg)) fail("a block behind a failed gate is still shown as read by apksig");
+    if (!sg.gate && sg.pairs === sg.total && sg.later !== sg.dupNamed) fail(`${sg.later} rows marked "later copy" ≠ ${sg.dupNamed} repeated named pairs`);
+  } else if (sg.ok && sg.badge !== "none") fail(`signing badge ${sg.badge} without a block`);
+  if (sg.sha !== sg.input) fail("build traces file_sha256 ≠ the input's sha256");
+  if (sg.tok && !sg.tbody.includes(sg.input)) fail("build traces card does not show the sha256");
+  if (!sg.copyS || !sg.copyT) fail("signing / traces copy is empty");
+  if (sg.raw) fail("an invisible / reordering character reached the Signing tab or its copy unescaped");
+  if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
+    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
       const { result: { data } } = await S("Page.captureScreenshot", { format: "png" });
       writeFileSync(file, Buffer.from(data, "base64")); console.log("screenshot:", file);
