@@ -130,6 +130,9 @@ for (const [path, n] of Object.entries(native)) {
   // signing block — exact, key order included (domain.js builds the same insertion order)
   diff("signing_block", D.signingBlock(m.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS)), n.signing_block);
 
+  // signer certificates (#58) — exact, key order included
+  diff("signing_certs", D.signingCerts(m.signingCerts(VFS)), n.signing_certs);
+
   // build traces. Dicts keyed by attacker strings (app_metadata, unreadable) are compared sorted:
   // a JS object puts integer-like keys first. Past the 64-name cap WHICH v1 signer files are kept
   // follows libziparchive's hash-table iteration (murmur2 on wasm32 vs CityHash64 on x86-64), so

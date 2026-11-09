@@ -16,6 +16,7 @@
 //   entryHeads(path, n, names: string[]|null) // each .head is a Uint8Array copy
 //   entryNames(path, prefix, suffixes: string[], cap)
 //   signingBlockPairs(path, cap, track: number[])
+//   signingCerts(path)                      // #58: signer certificates as present, unverified
 //   tamperScan(path)
 // (embind checks the argument count: every argument is passed, null for Python's None default.)
 //
@@ -47,6 +48,7 @@
 #include <vector>
 
 #include "apksig.h"
+#include "certs.h"
 #include "container.h"
 #include "tamper.h"
 
@@ -462,11 +464,179 @@ val TamperScan(const std::string& path) {
 
 }  // namespace
 
+// ── signing_certs (#58) — module.cpp SigningCertsDict / NameDict / CertDict, key for key ──
+
+// A JDK-rendered DN (UTF-16, as Java holds it) → JS string. Always well-formed upstream; a lone
+// surrogate would become U+FFFD, as module.cpp's U16Str decodes with errors="replace". Built as
+// UTF-8 and decoded by the same TextDecoder as SafeStr (a NUL inside a value survives).
+val U16Str(const std::u16string& s) {
+    std::string u;
+    u.reserve(s.size() * 3);
+    auto put = [&](uint32_t c) {
+        if (c < 0x80) {
+            u += static_cast<char>(c);
+        } else if (c < 0x800) {
+            u += static_cast<char>(0xC0 | (c >> 6));
+            u += static_cast<char>(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            u += static_cast<char>(0xE0 | (c >> 12));
+            u += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            u += static_cast<char>(0x80 | (c & 0x3F));
+        } else {
+            u += static_cast<char>(0xF0 | (c >> 18));
+            u += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+            u += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            u += static_cast<char>(0x80 | (c & 0x3F));
+        }
+    };
+    for (size_t i = 0; i < s.size(); ++i) {
+        uint32_t c = s[i];
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.size() && s[i + 1] >= 0xDC00 && s[i + 1] <= 0xDFFF) {
+            put(0x10000 + ((c - 0xD800) << 10) + (s[i + 1] - 0xDC00));
+            ++i;
+        } else if (c >= 0xD800 && c <= 0xDFFF) {
+            put(0xFFFD);
+        } else {
+            put(c);
+        }
+    }
+    return SafeStr(u);
+}
+
+val OptStr(const std::string& s) { return s.empty() ? val::null() : SafeStr(s); }
+
+val NameObj(const apkllm::NameAsPresent& n) {
+    val d = val::object();
+    d.set("rfc2253", n.rendered ? U16Str(n.rfc2253) : val::null());
+    d.set("display", n.rendered ? U16Str(n.display) : val::null());
+    d.set("jdk_rejects", OptStr(n.jdk_rejects));
+    d.set("error", OptStr(n.error));
+    val attrs = val::array();
+    for (size_t i = 0; i < n.attrs.size(); ++i) {
+        const auto& a = n.attrs[i];
+        val x = val::object();
+        x.set("rdn", a.rdn);
+        x.set("oid", SafeStr(a.oid));
+        x.set("keyword", OptStr(a.keyword));
+        x.set("tag", a.tag);
+        x.set("value_size", Num(a.value_size));
+        x.set("value_hex", a.value_hex);
+        x.set("text", a.has_text ? U16Str(a.text) : val::null());
+        attrs.set(i, x);
+    }
+    d.set("attrs", attrs);
+    d.set("attrs_total", Num(n.attrs_total));
+    return d;
+}
+
+val CertObj(const apkllm::CertAsPresent& c) {
+    val d = val::object();
+    d.set("size", Num(c.size));
+    d.set("sha256", c.sha256);
+    d.set("trailing_bytes", Num(c.trailing_bytes));
+    d.set("encoding", OptStr(c.encoding));
+    d.set("tbs_read", c.tbs_read);
+    d.set("error", OptStr(c.error));
+    d.set("jdk_rejects", OptStr(c.jdk_rejects));
+    d.set("serial", c.serial_present ? SafeStr(c.serial) : val::null());
+    d.set("subject", c.tbs_read ? NameObj(c.subject) : val::null());
+    d.set("issuer", c.tbs_read ? NameObj(c.issuer) : val::null());
+    return d;
+}
+
+val CertList(const std::vector<apkllm::CertAsPresent>& certs) {
+    val l = val::array();
+    for (size_t i = 0; i < certs.size(); ++i) l.set(i, CertObj(certs[i]));
+    return l;
+}
+
+val SchemeObj(const apkllm::SchemeResult& s) {
+    if (!s.present) return val::null();
+    val d = val::object();
+    d.set("first_entry", s.first_entry);
+    d.set("count", Num(s.count));
+    d.set("error", OptStr(s.certs.error));
+    val signers = val::array();
+    for (size_t i = 0; i < s.certs.signers.size(); ++i) {
+        const auto& g = s.certs.signers[i];
+        val x = val::object();
+        x.set("index", g.index);
+        if (g.has_sdk && g.sdk_read) {  // v3 / v3.1 only, and only what was read
+            x.set("min_sdk", g.min_sdk);
+            x.set("max_sdk", g.max_sdk);
+        }
+        if (g.has_sdk && g.signed_sdk_read) {
+            x.set("signed_min_sdk", g.signed_min_sdk);
+            x.set("signed_max_sdk", g.signed_max_sdk);
+        }
+        x.set("certs", CertList(g.certs));
+        x.set("certs_total", Num(g.certs_total));
+        x.set("error", OptStr(g.error));
+        signers.set(i, x);
+    }
+    d.set("signers", signers);
+    d.set("signers_total", Num(s.certs.signers_total));
+    return d;
+}
+
+val SigningCerts(const std::string& path) {
+    apkllm::SigningCerts r = apkllm::ReadSigningCerts(path);
+    val out = val::object();
+    out.set("ok", r.ok);
+    if (!r.ok) {
+        out.set("error", SafeStr(r.error));
+        return out;
+    }
+    out.set("file_sha256", r.file_sha256);
+    out.set("cd_contiguous", r.cd_contiguous);
+    out.set("zip64_locator_present", r.zip64_locator_present);
+    out.set("block_found", r.block_found);
+    out.set("block_reason", OptStr(r.block_reason));
+    out.set("walk_error_entry", r.walk_error_entry ? val(r.walk_error_entry) : val::null());
+    out.set("walk_error_reason", OptStr(r.walk_error_reason));
+    out.set("v2", SchemeObj(r.v2));
+    out.set("v3", SchemeObj(r.v3));
+    out.set("v31", SchemeObj(r.v31));
+    out.set("source_stamp", SchemeObj(r.stamp));
+    out.set("v1_ok", r.v1_ok);
+    out.set("v1_error", OptStr(r.v1_error));
+    out.set("v1_total", Num(r.v1_total));
+    val v1 = val::array();
+    for (size_t i = 0; i < r.v1.size(); ++i) {
+        const auto& f = r.v1[i];
+        val x = val::object();
+        x.set("name", SafeStr(f.name));
+        x.set("name_hex", NameHex(f.name));
+        x.set("sf_present", f.sf_known ? val(f.sf_present) : val::null());
+        x.set("read_error", OptStr(f.read_error));
+        x.set("error", OptStr(f.pkcs7.error));
+        x.set("certs", CertList(f.pkcs7.certs));
+        x.set("certs_total", Num(f.pkcs7.certs_total));
+        val infos = val::array();
+        for (size_t k = 0; k < f.pkcs7.signer_infos.size(); ++k) {
+            const auto& v = f.pkcs7.signer_infos[k];
+            val y = val::object();
+            y.set("sid_kind", v.sid_kind);
+            y.set("issuer", v.sid_kind == "issuer_and_serial" ? NameObj(v.issuer) : val::null());
+            y.set("serial", v.serial_present ? SafeStr(v.serial) : val::null());
+            y.set("match", v.match);
+            y.set("cert_index", v.cert_index >= 0 ? val(v.cert_index) : val::null());
+            infos.set(k, y);
+        }
+        x.set("signer_infos", infos);
+        x.set("signer_infos_total", Num(f.pkcs7.signer_infos_total));
+        v1.set(i, x);
+    }
+    out.set("v1", v1);
+    return out;
+}
+
 EMSCRIPTEN_BINDINGS(apkllm_wasm) {
     function("installGate", &InstallGate);
     function("extractEntry", &ExtractEntry);
     function("entryHeads", &EntryHeads);
     function("entryNames", &EntryNames);
     function("signingBlockPairs", &SigningBlockPairs);
+    function("signingCerts", &SigningCerts);
     function("tamperScan", &TamperScan);
 }

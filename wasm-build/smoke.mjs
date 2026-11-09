@@ -101,6 +101,15 @@ for (const path of TESTS) {
     if (missing.ok) fail("extractEntry on a missing name returned ok");
   }
 
+  const sc = m.signingCerts(VFS);   // #58: certificates as present
+  console.log("  signingCerts ok=", sc.ok, sc.ok
+    ? `v2=${sc.v2 ? sc.v2.signers.length : "-"} v3=${sc.v3 ? sc.v3.signers.length : "-"} v1=${sc.v1.length}/${sc.v1_total} first=${sc.v2?.signers?.[0]?.certs?.[0]?.subject?.display ?? "-"}`
+    : `error=${sc.error}`);
+  if (sc.ok) {
+    for (const k of ["v2", "v3", "v31", "source_stamp"]) for (const g of sc[k]?.signers ?? [])
+      for (const c of g.certs) if (!/^[0-9a-f]{64}$/.test(c.sha256)) fail(`${k} certificate without a sha256`);
+    if (sc.v1_total < sc.v1.length) fail("v1_total < listed v1 files");
+  }
   const sb = m.signingBlockPairs(VFS, 256, [0x7109871a, 0xf05368c0]);
   console.log("  signingBlockPairs ok=", sb.ok, sb.ok
     ? `framing_found=${sb.framing_found} pairs=${(sb.pairs ?? []).map(b => "0x" + b.id.toString(16)).join(",") || "-"} total=${sb.pairs_total ?? "-"}`

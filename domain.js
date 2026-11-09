@@ -831,8 +831,33 @@ function buildTraces(sha256, names, heads) {
   };
 }
 
+// ── container.signing_certs (#58) ───────────────────────────────────────────
+// Every signer certificate AS PRESENT — never verified (Java apksig is the verdict, outside this
+// demo; a certificate's bytes are copyable). Mirrors container.signing_certs over the engine's
+// signingCerts(path): same keys, same order (Python's {**d, k: v} keeps an existing key in place).
+const CERT_RENDERING = "jdk17_x500principal_rfc2253";  // container.CERT_RENDERING
+
+function signingCerts(r) {
+  if (!r.ok) return r;
+  const consumed = Boolean(r.cd_contiguous) && !r.zip64_locator_present;
+  const certs = (raw) => raw.map(c => ({ ...c, unverified: true }));
+  const scheme = (x) => x === null ? null
+    : { ...x, consumed, signers: x.signers.map(g => ({ ...g, certs: certs(g.certs) })) };
+  return {
+    ok: true, unverified: true, rendering: CERT_RENDERING,
+    file_sha256: r.file_sha256, cd_contiguous: r.cd_contiguous,
+    zip64_locator_present: r.zip64_locator_present, block_found: r.block_found,
+    block_reason: r.block_reason, walk_error_entry: r.walk_error_entry,
+    walk_error_reason: r.walk_error_reason,
+    v2: scheme(r.v2), v3: scheme(r.v3), v31: scheme(r.v31), source_stamp: scheme(r.source_stamp),
+    v1: { ok: r.v1_ok, error: r.v1_error, reader: "libziparchive",
+          files: r.v1.map(f => ({ ...f, certs: certs(f.certs) })), files_total: r.v1_total },
+  };
+}
+
 root.ApkllmDomain = { HEAD_BYTES, SIGNATURES, CATEGORY, classify, unknownKind, entropy,
                       contentMap, containerChecks, tamperChecks, READER, extractReport,
                       PAIR_NAMES, PAIR_IDS, PAIRS_CAP, signingBlock,
-                      MANIFEST, APP_METADATA, V1_SIG_EXT, TRACE_HEAD, TRACE_LIST_CAP, buildTraces };
+                      MANIFEST, APP_METADATA, V1_SIG_EXT, TRACE_HEAD, TRACE_LIST_CAP, buildTraces,
+                      CERT_RENDERING, signingCerts };
 })(typeof self !== "undefined" ? self : globalThis);
