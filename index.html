@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "c2ecd69-1";
+window.__APKLLM_BUILD = "9b512e9-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -1431,7 +1431,8 @@ const COPY = {
       for (const g of sc.signers) if (g.lineage) { const l = g.lineage;
         head.push([`${label} signer #${g.index} lineage`, `${l.nodes_total} node(s), ${l.nodes.length} listed, ${l.attrs} attribute(s)` +
           (l.version !== null && l.version !== 1 ? `, version ${l.version}` : "") +
-          (l.attr_errors.some(e => e !== null) ? " · attribute errors: " + l.attr_errors.map((e, i) => e === null ? "" : `#${i} ${e}`).filter(Boolean).join(", ") + " (never kept by apksig)" : l.error ? " · " + l.error : "") +
+          (l.attrs_failed ? ` · ${l.attrs_failed} attribute error(s): ` + l.attr_errors.map((e, i) => e === null ? "" : `#${i} ${e}`).filter(Boolean).join(", ") + (l.attrs_failed > l.attr_errors.filter(e => e !== null).length ? ", …" : "") + " (never kept by apksig)" : l.error ? " · " + l.error : "") +
+          (l.attrs_mismatched ? ` · ${l.attrs_mismatched} attribute(s) whose last key is not the signer certificate` : "") +
           " · unverified"]); }
       for (const g of sc.signers) if (g.error || "min_sdk" in g || "signed_min_sdk" in g)
         head.push([`${label} signer #${g.index}`, ["min_sdk" in g ? `SDK ${g.min_sdk}–${g.max_sdk}` : "", "signed_min_sdk" in g ? `signed SDK ${g.signed_min_sdk}–${g.signed_max_sdk}` : "",
@@ -1448,7 +1449,7 @@ const COPY = {
       for (const n of g.lineage?.nodes ?? []) rows.push([label + " lineage", g.index, `node ${n.index} (attr ${n.attr})`,
         n.cert ? dn(n.cert.subject) : "", n.cert ? dn(n.cert.issuer) : "", n.cert?.serial ?? "", n.cert?.sha256 ?? "", n.cert?.encoding ?? "",
         [n.cert ? "" : "no certificate read", n.capabilities ? "claims: " + (n.capabilities.join(", ") || "none") : "", n.error ?? "",
-         g.lineage.attr_errors[n.attr] ? "attribute error: " + g.lineage.attr_errors[n.attr] : "", "unverified"].filter(Boolean).join(" · ")]);
+         n.attr_error ? "attribute error: " + n.attr_error : "", n.attr_leaf_match === false ? "its lineage does not end in the signer certificate" : "", "unverified"].filter(Boolean).join(" · ")]);
     }
     for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) if (!g.certs.length) rows.push([label, g.index, "", "", "", "", "", "", g.error ?? "no certificate read"]);
     const vname = (f) => "v1 " + f.name + (f.name_hex ? " [raw " + f.name_hex + "]" : "");
@@ -1613,22 +1614,24 @@ const certRow = (label, i, c, attrs = "") => `<tr ${attrs}><td>${label}</td><td 
 // verified: the capabilities are what each node CLAIMS, not rights apksig granted.
 function lineageRows(g, stamp) {
   const l = g.lineage;
+  // the engine keeps the first 16 attributes' facts; attrs_failed / attrs_mismatched are exact
   const failing = l.attr_errors.map((e, i) => e === null ? "" : `#${i} ${vis(e)}`).filter(Boolean);
-  const failShown = failing.length > 16 ? failing.slice(0, 16).concat([`… ${failing.length - 16} more`]) : failing;
+  const failShown = l.attrs_failed > failing.length ? failing.concat([`… ${l.attrs_failed - failing.length} more`]) : failing;
   const kept = stamp ? "concatenated in order, listed up to the node cap; apksig appends only those that parse and verify"
                      : "the last listed; apksig keeps the last that parses and verifies, and a failing one adds an error to the signer";
   const head = `<tr class="sep"><td colspan="8" class="tiny">signer #${g.index} · proof-of-rotation lineage as present, <b>unverified</b> — ${l.nodes_total} node${l.nodes_total === 1 ? "" : "s"}` +
     `${l.nodes_total > l.nodes.length ? ` (${l.nodes.length} listed)` : ""}${l.attrs > 1 ? ` · ${l.attrs} attributes (${kept})` : ""}` +
     `${l.version !== null && l.version !== 1 ? ` · version ${l.version} (apksig knows 1)` : ""}` +
-    (failing.length ? ` · <span class="pill warn">attribute error${failing.length > 1 ? "s" : ""}</span> ${failShown.join(", ")} <span class="tiny">(apksig never keeps such an attribute)</span>`
-                    : l.error ? ` <span class="pill warn">${vis(l.error)}</span>` : "") + `</td></tr>`;
+    (l.attrs_failed ? ` · <span class="pill warn">attribute error${l.attrs_failed > 1 ? "s" : ""}</span> ${failShown.join(", ")} <span class="tiny">(apksig never keeps such an attribute)</span>`
+                    : l.error ? ` <span class="pill warn">${vis(l.error)}</span>` : "") +
+    (l.attrs_mismatched ? ` · <span class="pill warn" data-leaf-mismatch>last certificate ≠ signer certificate</span> <span class="tiny">${l.attrs_mismatched} attribute${l.attrs_mismatched > 1 ? "s" : ""}${l.attr_leaf_matches.some(m => m === false) ? " (" + l.attr_leaf_matches.map((m, i) => m === false ? "#" + i : "").filter(Boolean).join(", ") + ")" : ""} — once a lineage verifies apksig reports ${stamp ? "SOURCE_STAMP_POR_CERT_MISMATCH (a warning)" : "V3_SIG_POR_CERT_MISMATCH (an error)"}</span>` : "") + `</td></tr>`;
   const nodeTag = (n) => `data-node="${n.index}"`;
   return [head, ...l.nodes.map(n => {
     // the five named bits; any other bit is shown raw (it names nothing apksig knows)
     const unknown = n.flags !== null && (n.flags & ~31) !== 0 ? ` (flags 0x${(n.flags >>> 0).toString(16)})` : "";
     const caps = n.capabilities === null ? "" : (n.capabilities.length ? n.capabilities.join(", ") : "none") + unknown;
     const root = l.nodes.find(x => x.attr === n.attr) === n;  // the first node of its attribute
-    const label = `↳ node ${n.index}${root ? " (root)" : ""}${l.attrs > 1 ? ` <span class="tiny">attr #${n.attr}${l.attr_errors[n.attr] !== null ? " ✗" : ""}</span>` : ""}` + (caps ? ` <span class="tiny">claims: ${caps}</span>` : "") +
+    const label = `↳ node ${n.index}${root ? " (root)" : ""}${l.attrs > 1 ? ` <span class="tiny">attr #${n.attr}${n.attr_error !== null ? " ✗" : ""}</span>` : ""}${n.attr_leaf_match === false ? ` <span class="tiny">(its lineage ends in another key)</span>` : ""}` + (caps ? ` <span class="tiny">claims: ${caps}</span>` : "") +
       (n.error ? ` <span class="pill warn">${vis(n.error)}</span>` : "");
     return n.cert ? certRow(label, "—", n.cert, nodeTag(n)) : `<tr ${nodeTag(n)}><td>${label}</td><td colspan="7" class="tiny">no certificate read</td></tr>`;
   })];
