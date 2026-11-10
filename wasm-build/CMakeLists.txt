@@ -8,10 +8,11 @@ project(apkllm_wasm LANGUAGES C CXX)
 # is forked here — the engine lives upstream; this file is the build recipe
 # and wasm_module.cpp the embind glue.
 #
-# Out of scope (by design): BoringSSL `crypto`. apkllm's CMakeLists links it
-# only into apkllm-zip-probe; no symbol the container layer uses comes from it,
-# so the wasm build drops the whole target (the signer certificates' SHA-256 is
-# libavb's). Signature verification is Java apksig and stays out of the web demo.
+# BoringSSL `crypto` is linked for ONE caller, as apkllm links it into _apk_core (#59): the
+# frosting check (native/apksig/frosting.cpp) parses Play's key and verifies its ECDSA signature
+# with AOSP BoringSSL, as the Play Store's Conscrypt provider calls it. Pure C/C++ (OPENSSL_NO_ASM).
+# Everything else hashes with AOSP libavb's portable SHA-256. APK signature verification is Java
+# apksig and stays out of the web demo.
 #
 # Configure with:
 #   source ~/emsdk/emsdk_env.sh
@@ -135,6 +136,25 @@ target_compile_definitions(ziparchive_static PRIVATE
 target_compile_options(ziparchive_static PUBLIC -w "SHELL:-s USE_ZLIB=1")
 target_link_options(ziparchive_static PUBLIC "SHELL:-s USE_ZLIB=1")
 
+# ── BoringSSL crypto — the frosting check's key parse + ECDSA (#59). Same source lists and
+#    defines as APKLLM_ROOT/CMakeLists.txt: the checked-in generated lists, no Go / asm.
+set(BSSL "${EXT}/boringssl/src")
+if(NOT EXISTS "${BSSL}/gen/sources.cmake")
+    message(FATAL_ERROR "BoringSSL not found at ${BSSL}. Check AOSP_ROOT.")
+endif()
+include(${BSSL}/gen/sources.cmake)
+set(BSSL_SRCS "")
+foreach(s ${CRYPTO_SOURCES} ${BCM_SOURCES})
+    list(APPEND BSSL_SRCS "${BSSL}/${s}")
+endforeach()
+add_library(crypto STATIC ${BSSL_SRCS})
+target_include_directories(crypto PUBLIC ${BSSL}/include PRIVATE ${BSSL})
+target_compile_definitions(crypto PUBLIC OPENSSL_NO_ASM)
+target_compile_options(crypto PRIVATE -w)
+# NOT apkllm's #59 bssl_hidden_hooks.h: under emscripten BoringSSL's WEAK_SYMBOL_FUNC is a static
+# NULL function pointer (no weak symbols), so the allocator hooks never become imports — and the
+# header's declarations would clash with it.
+
 # ── libavb SHA-256 — AOSP's portable C implementation, as-is (apkllm #58: the signer
 #    certificates' digest without BoringSSL). Same two files and defines as APKLLM_ROOT.
 set(AVB "${EXT}/avb/libavb")
@@ -147,20 +167,25 @@ target_include_directories(avb_sha256_static PUBLIC ${AVB} ${AVB}/crypto)
 target_compile_definitions(avb_sha256_static PRIVATE AVB_COMPILATION)
 target_compile_options(avb_sha256_static PRIVATE -w)
 
-# ── apkllm native core — container install-gate + structural signing-block
-#    reader + tamper scan + signer certificates as present (certs.cpp, #58). Same
-#    sources as APKLLM_ROOT/CMakeLists.txt's apk_native_static MINUS the crypto
-#    dependency (apksig.cpp is the structural EOCD/Signing-Block locator and needs no
-#    BoringSSL; certs.cpp hashes with libavb).
+# ── apkllm native core — the same sources as APKLLM_ROOT/CMakeLists.txt's apk_native_static:
+#    every result is decided whole in the engine (#67), so the binding converts and decides nothing.
 add_library(apk_native_static STATIC
     ${APKLLM_ROOT}/native/container/container.cpp
     ${APKLLM_ROOT}/native/apksig/apksig.cpp
     ${APKLLM_ROOT}/native/apksig/tamper.cpp
     ${APKLLM_ROOT}/native/apksig/certs.cpp
+    ${APKLLM_ROOT}/native/container/traces.cpp
+    ${APKLLM_ROOT}/native/container/plan.cpp
+    ${APKLLM_ROOT}/native/container/text.cpp
+    ${APKLLM_ROOT}/native/container/checks.cpp
+    ${APKLLM_ROOT}/native/container/tamper_report.cpp
+    ${APKLLM_ROOT}/native/container/magic.cpp
+    ${APKLLM_ROOT}/native/container/content_map.cpp
+    ${APKLLM_ROOT}/native/apksig/frosting.cpp
 )
 target_include_directories(apk_native_static PUBLIC
     ${APKLLM_ROOT}/native/container ${APKLLM_ROOT}/native/apksig)
-target_link_libraries(apk_native_static PUBLIC ziparchive_static avb_sha256_static)
+target_link_libraries(apk_native_static PUBLIC ziparchive_static avb_sha256_static crypto)
 
 # ── Embind binding (this file).
 add_executable(apkllm wasm_module.cpp)

@@ -3,7 +3,7 @@
 [apkllm](https://github.com/mobile-threat-hunter/apk-analyzer-for-llm)'s **container layer** running in
 the browser: real AOSP `system/libziparchive` (the device's own ZIP reader) compiled to
 WebAssembly, plus apkllm's install-gate, content-typing, present-vs-consumed tamper
-scan and the structural signing-side reads (APK Signing Block pairs, signer certificates as present, build traces) over it. Drop an APK and see what the device would consume — nothing is uploaded.
+scan, the structural signing-side reads (APK Signing Block pairs, signer certificates as present, build traces) and Google Play's frosting check over it. Drop an APK and see what the device would consume — nothing is uploaded.
 
 **Live:** <https://mobile-threat-hunter.github.io/apkllm-web/>
 
@@ -12,14 +12,18 @@ Same structure as [dexllm-web](https://github.com/mobile-threat-hunter/dexllm-we
 
 ## What it shows
 
-| Tab | Engine call (mirrors `apkllm._apk_core`) | Python layer ported to `domain.js` |
-|---|---|---|
-| **Install gate** | `installGate` — every entry libziparchive enumerates, with its install/load verdict (native-lib STORED+page-aligned, dex method ∈ {0,8}, resources.arsc STORED+4-aligned) and the honest tri-state container verdict | `container._container_checks` |
-| **Extract** | `extractEntry` per entry — the bytes come only from the entry's **own mapped device reader** (four-reader model: `NativeLibraryHelper` / `ART.DexFileLoader` strict, `AssetManager` lenient, generic `libziparchive` strict). Method 8 → inflate, 0 → stored copy, a forged method → raw stored only for AssetManager classes; a strict reader's forged entry is reported as rejected, never re-read with another reader's algorithm. One entry (`bytes`, or **double-click its row**) or a selection / all as a `.zip` | `container._disposition` + `extract_map` + `extract_report` (the decompression plan: reader, disposition, device_loads, deliverable) |
-| **Content** | `entryHeads` — each entry's first 512 bytes as its *own device reader* produces them (inflate / stored / lenient raw) | `magic.classify` + `container.content_map` (type by magic, role / extension mismatch) |
-| **Images** | `extractEntry` — every entry that is an image by magic (whatever its name), rendered lazily from its own reader's bytes; width × height is read from the header first (PNG, GIF, BMP, ICO, WebP, JPEG) and a bitmap over 24 Mpx is decoded only on request in the viewer | Content's `classify` + `extension_mismatch` (MIME from magic, never from the name) |
-| **Tamper scan** | `tamperScan` — an own raw ZIP walk (not libziparchive) reporting where what is *present* diverges from what the device *consumes*: CD↔LFH mismatch, duplicate names, method forgery, Janus, second EOCD | `container._tamper_checks` |
-| **Signing** | `signingBlockPairs` — the APK Signing Block's ID→value pairs in block order (duplicates kept; first 256 + exact total, whole-walk count + first pair per named ID; no value read) and the two gates both AOSP readers apply first (CD contiguous with the EOCD, no ZIP64). `signingCerts` — every signer certificate as present (v1 / v2 / v3 / v3.1 / stamp; subject / issuer in the JDK 17 form apksig reports, hidden characters escaped; serial, SHA-256; nothing verified), and each v3 / v3.1 / stamp proof-of-rotation lineage node by node (the capabilities each node claims, which attribute it came from and whether that attribute is structurally sound, and whether each lineage ends in the signer's own certificate — apksig keeps only attributes that parse and verify; per-attribute facts stop at 16, their counts stay exact). `entryNames` + `entryHeads(names)` — the v1 signature files under `META-INF/`, `MANIFEST.MF` and AGP's `app-metadata.properties` through their own device readers (4 KiB heads) | `container.signing_block` (pair names: apksig constants or observed IDs, duplicate / unknown IDs, which copy of an ID apksig reads, a malformed pair stopping the walk) + `container.signing_certs` (#58: which certificate apksig would read where, which bag certificate each v1 SignerInfo names — exact / equivalent / canonical_unknown / none / unknown / never) + `container.build_traces` (v1 signer files, `Created-By` / `Built-By` by apksig's manifest rules, app-metadata keys — attacker-writable hints, never evidence) |
+Since apkllm #67 every report below is decided whole in apkllm's C++ engine and converted one to
+one by the binding — the same result the Python API returns. Only `signing_block`'s pair naming
+is still Python in apkllm, so only that lives in `domain.js`.
+
+| Tab | Engine call (mirrors `apkllm._apk_core`) |
+|---|---|
+| **Install gate** | `installGate` — every entry libziparchive enumerates, with its install/load verdict (native-lib STORED+page-aligned, dex method ∈ {0,8}, resources.arsc STORED+4-aligned), the honest tri-state container verdict, the base-AssetManager membership the split facts decide, and the checks |
+| **Extract** | `extractPlan` (extract_report: each entry's reader, disposition, device_loads, deliverable, the summary and checks) + `extractEntry` per entry — the bytes come only from the entry's **own mapped device reader** (four-reader model: `NativeLibraryHelper` / `ART.DexFileLoader` strict, `AssetManager` lenient, generic `libziparchive` strict). Method 8 → inflate, 0 → stored copy, a forged method → raw stored only for AssetManager classes; a strict reader's forged entry is reported as rejected, never re-read with another reader's algorithm. One entry (`bytes`, or **double-click its row**) or a selection / all as a `.zip` |
+| **Content** | `contentMap` — each entry's first 512 bytes as its *own device reader* produces them (inflate / stored / lenient raw), typed by the engine's magic table (role / extension mismatch, checks); `entryHeads` gives the same heads for the hex view |
+| **Images** | `extractEntry` — every entry that is an image by magic (whatever its name), rendered lazily from its own reader's bytes; width × height is read from the header first (PNG, GIF, BMP, ICO, WebP, JPEG) and a bitmap over 24 Mpx is decoded only on request in the viewer; the MIME comes from the magic, never from the name |
+| **Tamper scan** | `tamperReport` — an own raw ZIP walk (not libziparchive) reporting where what is *present* diverges from what the device *consumes*: CD↔LFH mismatch, duplicate names, method forgery, Janus, second EOCD; summary and checks |
+| **Signing** | `signingBlockPairs` — the APK Signing Block's ID→value pairs in block order (duplicates kept; first 256 + exact total, whole-walk count + first pair per named ID; no value read) and the two gates both AOSP readers apply first (CD contiguous with the EOCD, no ZIP64), named by `domain.js` as `container.signing_block` does (apksig constants or observed IDs, duplicate / unknown IDs, which copy of an ID apksig reads, a malformed pair stopping the walk). `frosting` — Google Play's frosting check (#59) under the built-in key: Play's result, whether its ECDSA signature verifies and whether the signed file digest is this file's; a **base / split hint** (play_set's rule: a verified frosting with a split catalog = the base; no frosting = a split or not from Play — one file cannot tell) and, **only once the signature verifies**, the split catalog — the whole-file SHA-256 of every split Play delivers with this base (a replayed frosting is marked: its catalog is about another file). `signingCerts` — every signer certificate as present (v1 / v2 / v3 / v3.1 / stamp; subject / issuer in the JDK 17 form apksig reports, hidden characters escaped; serial, SHA-256; whether the device's X.509 parser refuses its encoding, #15; nothing verified), which bag certificate each v1 SignerInfo names, and each v3 / v3.1 / stamp proof-of-rotation lineage node by node (the capabilities each node claims, which attribute it came from and whether that attribute is structurally sound, and whether each lineage ends in the signer's own certificate). `buildTraces` — the file SHA-256, the v1 signature files under `META-INF/`, `MANIFEST.MF`'s `Created-By` / `Built-By` by apksig's manifest rules and AGP's `app-metadata.properties` keys (4 KiB heads through their own device readers; attacker-writable hints, never evidence) |
 
 **Copy.** As in dexllm-web, every card has a **⧉ copy** button that copies its whole
 dataset as tab-separated text (every entry, not just the filtered view); clicking an entry
@@ -28,8 +32,10 @@ attacker-controlled, so TSV cells escape `\\ \t \n \r \"` and U+0085/2028/2029 (
 one row for any line splitter, and a leading quote cannot open a spreadsheet quoted field),
 and a cell starting with `= + - @` gets a leading `'` so a pasted sheet never evaluates it.
 
-Manifest-owned inputs (`extractNativeLibs`, `targetSdk`, base-AssetManager membership)
-are parameters MMH gets from axmlllm; here you set them in the form. Unknown ⇒ the
+Manifest-owned inputs (`extractNativeLibs`, `targetSdk`, and the split facts `apk_role` /
+`isolatedSplits` / feature split / `configForSplit` that decide base-AssetManager membership)
+are parameters MMH gets from axmlllm; here you set them in the form (`apk_role` starts at
+apkllm's one documented assumption, "base", echoed as `default`). Unknown ⇒ the
 verdict stays conditional (`needs_manifest`), never guessed.
 
 **Analyzer, not gatekeeper.** Every verdict is informational display. A failing entry is
@@ -64,8 +70,9 @@ extracted bytes); dropping another file (or **cancel**) stops a running bundle. 
 content *name* (apkllm's choice), sha256 beside it tells an md5 collision from identical
 content (a pure-JS SHA-256 stands in where WebCrypto is unavailable, e.g. a plain-http origin).
 
-Out of scope: signature verification (Java apksig in apkllm: whether a scheme verifies, whose
-signature it is, platform_view's device-reject rules) and unwrap (Python). The Signing tab shows
+Out of scope: APK signature verification (Java apksig in apkllm: whether a scheme verifies, whose
+signature it is, platform_view's device-reject rules), `frosting()`'s Python container-view checks
+and play_origin / play_set (several runs or files), and unwrap (Python). The Signing tab shows
 only what the container holds — its certificates included, unverified: a certificate's bytes are
 public, so a listed one proves nothing about who signed the APK.
 

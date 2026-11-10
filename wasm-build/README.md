@@ -3,25 +3,34 @@
 apkllm's **container layer** compiled to WebAssembly for the apkllm-web demo: real AOSP
 `system/libziparchive` (+ libbase / libutils / liblog / libcutils / incfs host deps,
 same source lists as `apkllm/CMakeLists.txt`) and apkllm's `native/container` +
-`native/apksig` (structural EOCD / signing-block pair walk + tamper scan + the signer
-certificates as present, `certs.cpp`, hashed with AOSP libavb's portable SHA-256). Nothing is
+`native/apksig` — the same `apk_native_static` source list: since apkllm #67 every report
+(install_gate, extract_plan, tamper_report, content_map with its magic table, build_traces,
+signing_certs) is decided whole in the engine as an ordered `Value`, plus the signing-block pair
+walk and Play's frosting check (`frosting.cpp`, #59). Certificates hash with AOSP libavb's
+portable SHA-256; the frosting check's key parse + ECDSA run on AOSP BoringSSL `crypto`
+(`OPENSSL_NO_ASM`, as apkllm builds it). Nothing is
 forked — every engine source is pulled from the apkllm / AOSP checkouts at configure
 time; this directory owns only the build recipe, a one-header musl shim, and the
 embind glue.
 
-Out of scope on purpose: BoringSSL (apkllm links it only into its zip probe; no container
-symbol needs it) and signature verification (Java apksig).
+Out of scope on purpose: APK signature verification (Java apksig). apkllm's
+`bssl_hidden_hooks.h` is not applied to `mem.cc`: under emscripten BoringSSL's allocator hooks are
+static NULL pointers (no weak symbols), so they never become imports — and the header would clash.
 
 ## Build
 
 ```sh
-source ~/emsdk/emsdk_env.sh                     # emcc 4.0.9 used for the current build
+source ~/emsdk/emsdk_env.sh                     # emcc 6.0.0 (libc++ 21: the engine's magic.cpp needs
+                                                # floating-point std::from_chars, libc++ >= 20)
+embuilder build zlib                            # once per fresh emsdk: a parallel first build races on the port
 cd wasm-build
 emcmake cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DAPKLLM_ROOT=/home/nyahumi/Project/apkllm   # -DAOSP_ROOT defaults to ~/Project/aosp
 cmake --build build --parallel
 node smoke.mjs                                  # real APKs from dexllm/test_apk + a non-zip
 python3 tamper_fixtures.py /tmp/fx && node smoke.mjs /tmp/fx/*.apk   # tamper findings path
+# frosting fixtures (test-key signed: verified / forged / replay / duplicate / > 1024 splits /
+# malformed / key index past the list) come from apkllm's tests/frostfix.py — crafted per session
 cp build/apkllm.js build/apkllm.wasm ..         # then bump window.__APKLLM_BUILD in index.html
 ```
 
@@ -32,39 +41,43 @@ Outputs: `build/apkllm.js` (MODULARIZE, `createApkllm`) + `build/apkllm.wasm`.
 ```sh
 # 1. every number vs the native Python layer on the same APKs
 (cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -P \
-   ~/Project/apkllm-web/wasm-build/xcheck.py /tmp/native.json APK... /tmp/fx/*.apk)
+   ~/Project/apkllm-web/wasm-build/xcheck.py /tmp/native.json APK... /tmp/fx/*.apk [--frost-key B64])
 node xcheck.mjs /tmp/native.json                # → ALL MATCH
 # 2. the page itself in headless Chrome (needs node ≥ 22 for global WebSocket —
 #    ~/emsdk/node/22.16.0_64bit/bin/node — and google-chrome on PATH)
 ~/emsdk/node/22.16.0_64bit/bin/node browser_check.mjs APK [shot.png]   # → BROWSER OK
 ```
 
-`xcheck` compares content_map / tamper_report / install_gate + extract_report (six input
-combinations) field by field, including the `checks[]` reasons `domain.js` reproduces from
-Python (a check's `detail` list compared in order: both sides keep the first 20 in raw-name byte
-order, #49 — libziparchive's own iteration order is `std::hash` order, which differs between
-wasm32 and x86_64, so `exceptions` / entry rows are compared by name), and runs `extract_entry` on every entry on both sides — keyed `x:<name_hex>` (raw bytes) for a lossy name, else `s:<name>` (sha256 of the
-device-faithful bytes, or the identical rejection error). It also compares `signing_block` exactly
-and `build_traces` with its attacker-keyed dicts sorted (a JS object puts integer-like keys
-first); past build_traces' 64-name cap WHICH v1 signer files are kept follows the same hash order,
-so there only the total and the count are compared.
+`xcheck` compares, since #67, the engine's own results on both sides — content_map, tamper_report,
+install_gate + extract_report (seven manifest / split-fact combinations), build_traces,
+signing_certs and frosting (under the built-in key and every `--frost-key`) — whole, key order
+included, and `signing_block` as `domain.js` names it. Where the platform legitimately differs it
+compares less: libziparchive's iteration order is `std::hash` order, which differs between
+wasm32 and x86_64, so entry rows and `exceptions` are compared by name and a histogram's tie order
+is not compared; past build_traces' 64-name cap WHICH v1 signer files are kept follows the same
+order (only the total and the count are compared); a JS object puts integer-like keys first
+(app-metadata compared sorted). It also runs `extract_entry` on every entry on both sides — keyed
+`x:<name_hex>` (raw bytes) for a lossy name, else `s:<name>` (sha256 of the device-faithful
+bytes, or the identical rejection error).
 
 ## Layout
 
-- `CMakeLists.txt` — mirrors apkllm's `ziparchive_static` / `apk_native_static` source
-  lists minus `crypto`; single-threaded, global `-fexceptions`, `USE_ZLIB=1`,
+- `CMakeLists.txt` — mirrors apkllm's `ziparchive_static` / `crypto` / `apk_native_static` source
+  lists; single-threaded, global `-fexceptions`, `USE_ZLIB=1`,
   `FORCE_FILESYSTEM=1` (MEMFS backs libziparchive's `open()`/`mmap()`).
 - `shim/include/sys/cdefs.h` — the only header musl lacks that AOSP includes
   (`__BEGIN_DECLS`); same shim axmlllm-web uses.
 - `wasm_module.cpp` — embind functions mirroring `apkllm/native/binding/module.cpp`
-  one-to-one (`installGate`, `extractEntry`, `entryHeads` (+ the `names` filter), `entryNames`,
-  `signingBlockPairs`, `tamperScan`; same field names incl. `name_hex` / `entry_hex` for a name that is not strict
+  one-to-one (`abi`, `installGate`, `extractPlan`, `extractEntry`, `entryHeads` (+ the `names`
+  filter), `contentMap`, `tamperReport`, `signingBlockPairs`, `buildTraces`, `signingCerts`,
+  `frosting`; an engine `Value` converted as `ToPy` does — map keys in order, strings as CPython's
+  UTF-8 "replace", a computed key defined as an own property; same field names incl. `name_hex` / `entry_hex` for a name that is not strict
   UTF-8, Python `None` ⇄ JS `null`; `extractEntry` takes the name as a string or, for a lossy
   name, a `Uint8Array` of its raw bytes — Python's `bytes`; embind checks the argument count, so
   every argument is passed, `null` where Python takes its `None` default).
-- `smoke.mjs` — node smoke test; self-consistency across the six functions. Ground
-  truth is the native binding on the same files:
-  `cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -c 'import sys; sys.path.insert(0,"build/dev"); import _apk_core as c; print(c.install_gate(PATH, arsc_scope=None)["entry_count"])'`
+- `smoke.mjs` — node smoke test; self-consistency across the functions (contentMap rows align
+  with entryHeads rows — the worker pairs them for the hex view; a frosting protobuf only under a
+  verified signature). Ground truth is `xcheck`.
 - `tamper_fixtures.py` — synthesizes the fixtures: dup-name / Janus / CD-method-forged
   (shapes from `apkllm/tests/test_checks.py`, the findings path) plus the review-found
   drift cases — `ctor` (extension = a JS `Object.prototype` key), `shortbad` (entry names
@@ -92,10 +105,9 @@ so there only the total and the count are compared.
   and naming checked on a synthetic dblclick; real CDP mouse input checks one download per
   double-click and no clipboard write), copy buttons and tab badges. `shot.png` → Tamper scan tab,
   `shot-extract.png` → Extract tab.
-- `../domain.js` (repo root) — apkllm's Python policy layer (`magic.py`,
-  `container._container_checks` / `content_map` / `_tamper_checks` / `_disposition` +
-  `extract_report`) ported to JS; the
-  worker runs it over the engine's raw results.
+- `../domain.js` (repo root) — what apkllm still decides in Python: `container.signing_block`'s
+  pair naming over `signingBlockPairs`, and `signing.FROSTING_KEYS_DEFAULT`; plus the engine ABI
+  the page expects (the worker refuses another `apkllm.wasm`).
 
 ## Lessons carried from dexllm-web / axmlllm-web
 
@@ -110,7 +122,7 @@ so there only the total and the count are compared.
   by `std::hash<std::string_view>` — libc++ uses murmur2 on a 32-bit `size_t` (wasm32)
   and CityHash64 on x86-64, so `installGate` / `entryHeads` enumerate in a different
   order than the native x86-64 build (and than a 64-bit device). Values are identical;
-  compare by name (`xcheck.mjs` does). `tamperScan` is the raw CD walk and keeps file order.
+  compare by name (`xcheck.mjs` does). `tamperReport` is the raw CD walk and keeps file order.
 - **liblog's host logger traps under wasm.** `GetThreadId()` in
   `liblog/logger_write.cpp` has no branch for a platform that is none of
   `__BIONIC__/__APPLE__/__linux__/_WIN32`, so clang emits `unreachable` and the first

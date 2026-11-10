@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "9b512e9-1";
+window.__APKLLM_BUILD = "787250a-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -382,14 +382,24 @@ window.__APKLLM_BUILD = "9b512e9-1";
         <label>targetSdk
           <input id="in-tsdk" type="number" min="1" max="99" placeholder="unknown">
         </label>
-        <label>in base AssetManager
-          <select id="in-arsc"><option value="">unknown</option><option value="true">yes (base APK)</option><option value="false">no (isolated split)</option></select>
+        <label>apk_role
+          <select id="in-role"><option value="default">base (assumed)</option><option value="base">base</option><option value="split">split</option><option value="">unknown</option></select>
+        </label>
+        <label>isolatedSplits <span class="tiny">(base manifest)</span>
+          <select id="in-iso"><option value="">unknown</option><option value="true">true</option><option value="false">false</option></select>
+        </label>
+        <label>feature split
+          <select id="in-feat"><option value="">unknown</option><option value="true">true</option><option value="false">false</option></select>
+        </label>
+        <label>configForSplit
+          <select id="in-cfg"><option value="">unknown</option><option value="true">true</option><option value="false">false</option></select>
         </label>
         <label>device page size
           <select id="in-page"><option value="4096">4 KiB</option><option value="16384">16 KiB</option></select>
         </label>
       </div>
-      <p class="note">apkllm never parses the manifest (that is axmlllm's job in MMH). In MMH these values arrive from axmlllm; here you supply them. Unknown ⇒ the verdict stays an honest tri-state — nothing is guessed.</p>
+      <p class="err" id="in-err"></p>
+      <p class="note">apkllm never parses the manifest (that is axmlllm's job in MMH). In MMH these values arrive from axmlllm; here you supply them. Unknown ⇒ the verdict stays an honest tri-state — nothing is guessed. The split facts decide whether this APK is in the base AssetManager (the only one the resources.arsc gate inspects); for a split, extractNativeLibs / targetSdk are the BASE's. <b>base (assumed)</b> is apkllm's one documented default — setting a split fact while it stays assumed makes the role unknown.</p>
     </div>
     <div class="card">
       <h2>Container verdict<button class="copybtn" type="button" data-copy="gate-verdict" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
@@ -507,6 +517,10 @@ window.__APKLLM_BUILD = "9b512e9-1";
       <div id="signing-body"></div>
     </div>
     <div class="card">
+      <h2>Google Play frosting <span class="tiny">(Play's own check of its signing-block pair, run by the engine — base / split hint and the split catalog, shown only once Play's signature verifies)</span><button class="copybtn" type="button" data-copy="frosting" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div id="frosting-body"></div>
+    </div>
+    <div class="card">
       <h2>Signer certificates <span class="tiny">(every certificate as present, NOT verified — whose APK it is, is Java apksig's call, outside this demo; a certificate's bytes are public and copyable)</span><button class="copybtn" type="button" data-copy="certs" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div id="certs-body"></div>
     </div>
@@ -622,16 +636,31 @@ function resetPanelScroll(panel) {
 
 // ── manifest inputs → re-run the gate ────────────────────────────────────
 function gateParams() {
-  const enl = $("#in-enl").value, arsc = $("#in-arsc").value, tsdk = $("#in-tsdk").value;
-  return {
-    extractNativeLibs: enl === "" ? null : enl === "true",
-    targetSdk: tsdk === "" ? null : Number(tsdk),
-    arscScope: arsc === "" ? null : arsc === "true",
+  const t3 = (id) => { const v = $(id).value; return v === "" ? null : v === "true"; };
+  const role = $("#in-role").value, tsdk = $("#in-tsdk").value;
+  const p = {
+    extractNativeLibs: t3("#in-enl"),
+    targetSdk: tsdk.trim() === "" ? null : Number(tsdk),
+    isolatedSplits: t3("#in-iso"), featureSplit: t3("#in-feat"), configForSplit: t3("#in-cfg"),
     pageSize: Number($("#in-page").value),
   };
+  if (role !== "default") p.apkRole = role === "" ? null : role;   // absent = "base" assumed
+  return p;
 }
-for (const id of ["#in-enl", "#in-arsc", "#in-page"]) $(id).addEventListener("change", rerunGate);
-$("#in-tsdk").addEventListener("change", rerunGate);
+for (const id of ["#in-enl", "#in-role", "#in-iso", "#in-feat", "#in-cfg", "#in-page"]) $(id).addEventListener("change", rerunGate);
+// targetSdk is refused at the field, as Python's int cast refuses it (worker.js checks again): the
+// last accepted value comes back, so the shown results and every later load use the shown inputs
+let tsdkOk = "";
+$("#in-tsdk").addEventListener("change", () => {
+  const el = $("#in-tsdk"), v = el.value.trim(), n = Number(v);
+  if (v !== "" && !(Number.isInteger(n) && n >= -(2 ** 31) && n < 2 ** 31)) {
+    el.value = tsdkOk;
+    $("#in-err").textContent = `targetSdk must be an integer — ${JSON.stringify(v.slice(0, 40))} refused, kept ${tsdkOk === "" ? "unknown" : tsdkOk}`;
+    return;
+  }
+  tsdkOk = v; $("#in-err").textContent = "";
+  rerunGate();
+});
 async function rerunGate() {
   if (!report) return;
   const gen = loadGen, cur = report;
@@ -644,7 +673,7 @@ async function rerunGate() {
 
 // ── rendering ────────────────────────────────────────────────────────────
 function renderAll() {
-  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderCerts(); renderTraces(); }
+  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderFrosting(); renderCerts(); renderTraces(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -667,6 +696,9 @@ function renderFilebar() {
   }
   if (gate.ok) pills.push(gate.installable === null ? '<span class="pill warn">installable: needs manifest</span>' : gate.installable ? '<span class="pill ok">installable (container)</span>' : '<span class="pill bad">not installable (container)</span>');
   if (signing.ok) pills.push(signing.found ? '<span class="pill info">APK Signing Block</span>' : '<span class="pill na">no signing block</span>');
+  const fr = report.frosting;
+  if (fr.ok && fr.present) pills.push(!frostClaim(fr) ? '<span class="pill warn">Play frosting not verified</span>'
+    : fr.uncovered_signer_schemes?.length ? `<span class="pill warn">Play frosting verified · ${fr.uncovered_signer_schemes.map(k => SCHEME_NAME[k]).join(" / ")} signer not bound</span>` : '<span class="pill info">Play frosting verified</span>');
   if (content.ok && content.summary.role_mismatch) pills.push(`<span class="pill bad">${content.summary.role_mismatch} role mismatch</span>`);
   $("#fpills").innerHTML = pills.join(" ");
   // tab count badges (dexllm-web .dextab .n). The number is the entry count (tamper: finding
@@ -709,7 +741,9 @@ function renderGate() {
     <dt>if extractNativeLibs=false</dt><dd>${tri(g.installable_if_extract_false)}</dd>
     <dt>if extractNativeLibs=true</dt><dd>${tri(g.installable_if_extract_true)}</dd>
     <dt>container consistent with</dt><dd>extractNativeLibs ∈ {${g.consistent_extract_native_libs.join(", ") || "∅"}}</dd>
-    <dt>inputs echoed</dt><dd>extractNativeLibs=${g.extract_native_libs ?? "unknown"} · targetSdk=${g.target_sdk ?? "unknown"} · in_base_asset_manager=${g.in_base_asset_manager ?? "unknown"} · page=${g.page_size}</dd>
+    <dt>inputs echoed</dt><dd>extractNativeLibs=${g.extract_native_libs ?? "unknown"} · targetSdk=${g.target_sdk ?? "unknown"} · page=${g.page_size}</dd>
+    <dt>split facts</dt><dd>apk_role=${g.apk_role ?? "unknown"} <span class="tiny">(${esc(g.apk_role_source ?? "")})</span> · isolatedSplits=${g.isolated_splits ?? "unknown"} · feature split=${g.feature_split ?? "unknown"} · configForSplit=${g.config_for_split ?? "unknown"}</dd>
+    <dt>in base AssetManager</dt><dd>${tri(g.in_base_asset_manager)} <span class="tiny">${esc(g.in_base_asset_manager_reason ?? "")}</span></dd>
     <dt>exceptions</dt><dd>${g.exceptions.length} entr${g.exceptions.length === 1 ? "y" : "ies"} fail the strict gate</dd>
   </dl>`;
   renderChecks($("#gate-checks"), g.checks);
@@ -1440,12 +1474,13 @@ const COPY = {
     }
     head.push(["v1", r.v1.ok ? `${r.v1.files_total} signature block file(s), ${r.v1.files.length} listed (reader: ${r.v1.reader})` : "unreadable — " + r.v1.error]);
     for (const f of r.v1.files ?? []) head.push([`v1 ${f.name}${f.name_hex ? " [raw " + f.name_hex + "]" : ""}`, [f.sf_present === true ? ".SF present" : f.sf_present === false ? "no .SF — apksig ignores it" : ".SF pairing unknown",
+      f.indefinite_wrappers ? "indefinite-length PKCS #7 wrappers — certificate encodings not judged" : "",
       f.read_error ? "read: " + f.read_error : "", f.error ? "PKCS #7: " + f.error : "", f.certs_total > f.certs.length ? `${f.certs_total - f.certs.length} more certificates not listed` : "",
       f.signer_infos_total > f.signer_infos.length ? `${f.signer_infos_total - f.signer_infos.length} more SignerInfos not listed` : ""].filter(Boolean).join(" · ")]);
     const dn = (n) => n === null ? "" : n.display ?? ("(" + (n.jdk_rejects ?? n.error) + ")");
     const rows = [];
     for (const [key, label] of CERT_SCHEMES) for (const g of r[key]?.signers ?? []) {
-      g.certs.forEach((c, i) => rows.push([label, g.index, i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", c.error ?? c.jdk_rejects ?? g.error ?? ""]));
+      g.certs.forEach((c, i) => rows.push([label, g.index, i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", strictNote(c, c.error ?? c.jdk_rejects ?? g.error ?? "")]));
       for (const n of g.lineage?.nodes ?? []) rows.push([label + " lineage", g.index, `node ${n.index} (attr ${n.attr})`,
         n.cert ? dn(n.cert.subject) : "", n.cert ? dn(n.cert.issuer) : "", n.cert?.serial ?? "", n.cert?.sha256 ?? "", n.cert?.encoding ?? "",
         [n.cert ? "" : "no certificate read", n.capabilities ? "claims: " + (n.capabilities.join(", ") || "none") : "", n.error ?? "",
@@ -1456,11 +1491,14 @@ const COPY = {
     const infos = [];
     for (const f of r.v1.files ?? []) {
       if (!f.certs.length) rows.push([vname(f), "bag", "", "", "", "", "", "", f.read_error ?? f.error ?? "no certificate read"]);
-      f.certs.forEach((c, i) => rows.push([vname(f), "bag", i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", c.error ?? c.jdk_rejects ?? ""]));
+      f.certs.forEach((c, i) => rows.push([vname(f), "bag", i, dn(c.subject), dn(c.issuer), c.serial ?? "", c.sha256, c.encoding ?? "", strictNote(c, c.error ?? c.jdk_rejects ?? "")]));
       f.signer_infos.forEach((v, i) => infos.push([vname(f), i, v.sid_kind, v.issuer ? dn(v.issuer) : "", v.serial ?? "", v.match, v.cert_index ?? ""]));
     }
     return "unverified: certificates as present\n" + head.map(([k, v]) => cell(k) + "\t" + cell(v)).join("\n") + "\n\n" + tsv(["scheme", "signer", "cert", "subject", "issuer", "serial", "sha256", "encoding", "note"], rows) +
       (infos.length ? "\n\n" + tsv(["v1_file", "signer_info", "sid_kind", "issuer", "serial", "match", "cert_index"], infos) : ""); },
+  "frosting": () => { const f = report.frosting; if (!f.ok) return unavailable(f, "unavailable");
+    const cat = f.signature === true ? f.protobuf?.catalog : null;
+    return kvText($("#frosting-body")) + (cat ? "\n\n" + tsv(["module", "split", "sha256", "about_this_file"], frostSplits(cat).map(([m, k, x]) => [m, k, x ? splitId(x) : "", tri3(f.file_digest_match)])) : ""); },
   "traces": () => { const t = report.traces; if (!t.ok) return unavailable(t, "unavailable") + "\nfile sha256\t" + cell(t.file_sha256 ?? "");
     return kvText($("#traces-body")) + "\n\n" + tsv(["v1_signer_file"], t.v1_signer_files.map(f => [f])) +
       (t.app_metadata ? "\n\n" + tsv(["app_metadata_key", "value"], Object.entries(t.app_metadata)) : ""); },
@@ -1574,10 +1612,97 @@ function renderSigning() {
     `<p class="note">Names: <b>aosp</b> = an apksig constant, <b>observed</b> = measured samples (not AOSP). No value is read here; whether any scheme verifies is apksig's call (apkllm.signing), not this page's.</p>`;
 }
 
+// Google Play frosting (signing.frosting, #59) --------------------------------
+// signing.frosting's view (domain.js frostingView over the engine's check): a Play claim keys on
+// `signature` (Play's ECDSA under the built-in key) AND `file_digest_match` — which is null until the
+// signature verified, and lowered to null (`digest_reason`) when the container gives Play and the
+// device different bytes. The protobuf (and its split catalog) exists only once the signature verified
+// and parsed; it is about THIS file only when the digest matches too (else replayed). The digest binds
+// the file outside the Signing Block and the FIRST v2 pair only — never a v3 / v3.1 signer.
+const fmtMs = (ms) => { const d = new Date(ms); return isNaN(d) ? `${ms} ms` : d.toISOString(); };   // a Date past ±8.64e15 ms is invalid
+const frostClaim = (f) => f.ok && f.signature === true && f.file_digest_match === true;
+const DIGEST_REASON = {
+  signature_not_verified: "only meaningful once Play's signature verified",
+  eocd_views_differ: "Play and the device find different ZIP ends", second_eocd: "a second EOCD — Play and the device may read different bytes",
+  eocd_selection_divergence: "the EOCD Play picks is not the device's", janus: "data in front of the ZIP (Janus) — the device may run other bytes",
+  prepended_data: "data in front of the ZIP", cd_not_contiguous: "bytes between the central directory and the EOCD",
+  device_reader_refuses: "the device's ZIP reader refuses this container", container_unreadable: "the container reads failed",
+};
+// play_set's rule, for one file: the base is the file with a verified frosting (its catalog lists the
+// splits); a split carries none. One file alone cannot tell a split from an APK Play never delivered.
+function frostRole(f) {
+  if (!f.ok) return ["na", "unknown", "the check could not run"];
+  if (f.present === false) return ["na", "unknown", "no frosting pair — a split, or an APK Google Play did not deliver (one file cannot tell which)"];
+  if (f.present !== true) return ["na", "unknown", "Play's walk stopped before it reached the pairs — not read"];
+  if (f.signature === false) return ["warn", "unknown", "a frosting pair is present but Play's signature does not verify — anyone can write one"];
+  if (f.signature !== true) return ["na", "unknown", f.play_result === null ? "Play's check would throw before judging the signature" : "Play's signature is not judged (" + esc(f.play_result) + ")"];
+  if (f.file_digest_match === false) return ["warn", "not this file's", "a genuine frosting replayed onto other bytes — its catalog describes another file"];
+  if (f.file_digest_match !== true) return ["warn", "unknown", "Play's signature verified, but " + (DIGEST_REASON[f.digest_reason] ?? "the digest is not judged")];
+  if (!f.protobuf) return ["warn", "unknown", "Play's signature verified, but its message does not parse (" + vis(f.protobuf_reason ?? "") + ")"];
+  if (!f.protobuf.catalog) return ["info", "verified, no catalog", `Play's frosting, but no split catalog (${esc(f.protobuf.catalog_reason ?? "absent")})`];
+  return ["info", "base", "a verified frosting with a split catalog — the file play_set takes as the base of its set (a hint: play_set decides over all the set's files)"];
+}
+const PLAY_RESULT = {
+  SUCCESS: "Play's checks passed", NO_FROSTING_BLOCK: "no frosting pair in the APK Signing Block",
+  MISSING_SIGNING_BLOCK: "no APK Signing Block", MISSING_EOCD: "no ZIP End of Central Directory", ZIP64_NOT_SUPPORTED: "Play refuses ZIP64",
+  BADLY_STRUCTURED_BLOCKS: "a malformed pair — Play stops walking the block",
+  SIGNATURE_DIDNT_VERIFY: "Play's signature does not verify under the built-in key", SIGNATURE_UPDATE_FAILED: "Play's signature does not verify",
+  SIGNING_KEY_INDEX_TOO_HIGH: "the entry names a key past the key list — not judged (a rotated key is not a forgery)",
+  NEGATIVE_SIGNING_KEY_INDEX: "a negative key index", PROD_VERIFICATION_KEY_INVALID: "the key does not parse", NO_SUPPORTED_VALIDATION_STRATEGY: "no enabled validation entry",
+  DIGEST_MISMATCH: "the signature verified, but the signed file digest is not this file's", MALFORMED_FROSTING: "the signature verified, but its protobuf does not parse",
+};
+// every split the catalog names: the base module's split + configs, then each feature module's
+function frostSplits(cat) {
+  const rows = [];
+  const mod = (m, label) => {
+    if (!m) return;
+    if (m.module_split) rows.push([label, "module split", m.module_split]);
+    m.configs.forEach((c, i) => rows.push([label, `config ${i}`, c]));
+    if (m.configs_cut) rows.push([label, `${m.configs_cut} more configs not listed`, null]);
+  };
+  mod(cat.base_module, "base module");
+  cat.modules.forEach((m, i) => mod(m, `module ${i}`));
+  if (cat.modules_cut) rows.push(["", `${cat.modules_cut} more modules not listed`, null]);
+  return rows;
+}
+const splitId = (x) => x.sha256 ?? (x.id_raw === null ? "" : `${x.id_raw} (${x.id_len}-byte id, not a SHA-256)`);
+const SCHEME_NAME = { v3: "v3", v31: "v3.1" };
+function renderFrosting() {
+  const f = report.frosting, el = $("#frosting-body");
+  if (!f.ok) { el.innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${vis(f.error)}</span>`; return; }
+  const [cls, role, why] = frostRole(f);
+  const res = f.play_result === null ? `<span class="pill bad">uncaught</span> <span class="tiny">Play would throw ${vis(f.uncaught ?? "")}</span>`
+    : `<code>${esc(f.play_result)}</code> <span class="tiny">${PLAY_RESULT[f.play_result] ?? ""}</span>`;
+  const sig = f.signature === true ? `<span class="pill ok">verified</span> <span class="tiny">built-in key, SPKI SHA-256 ${esc((f.key_spki_sha256 ?? "").slice(0, 16))}…</span>`
+    : f.signature === false ? '<span class="pill bad">does not verify</span>' : '<span class="pill na">not judged</span>';
+  const dig = f.file_digest_match === true ? '<span class="pill ok">this file</span> <span class="tiny">Play\'s digest matches this file outside the Signing Block' + (f.covered?.v2 ? " and its first v2 pair" : "") + "</span>"
+    : f.file_digest_match === false ? '<span class="pill bad">another file</span> <span class="tiny">replayed — the catalog below is not about this APK</span>'
+    : `<span class="pill na">no claim</span> <span class="tiny">${DIGEST_REASON[f.digest_reason] ?? "not reached"}${f.digest_claim_matches !== null ? ` (the unsigned value ${f.digest_claim_matches ? "matches" : "differs"})` : ""}</span>`;
+  const unbound = f.uncovered_signer_schemes ?? [];
+  // what the digest binds — only worth saying once the frosting is Play's AND about this file
+  const binds = f.covered === null || !frostClaim(f) ? "" : `<dt>binds</dt><dd>${f.covered.v2 ? "the v2 signer (first v2 pair)" : '<span class="pill warn">no v2 pair</span>'} + everything outside the Signing Block` +
+    (unbound.length ? ` · <span class="pill warn" data-unbound>${unbound.map(k => SCHEME_NAME[k]).join(" / ")} signer not bound</span> <span class="tiny">a device that uses ${unbound.length > 1 ? "them" : "it"} installs a signer the frosting does not bind</span>` : "") +
+    (f.uncovered_pairs?.length ? ` <span class="tiny">· not covered: ${f.uncovered_pairs.map(esc).join(", ")}${f.uncovered_pairs_cut ? ` (+${f.uncovered_pairs_cut} more)` : ""}</span>` : "") + "</dd>";
+  const pb = f.protobuf, cat = pb?.catalog ?? null, mine = f.file_digest_match === true;
+  const rows = f.signature === true && cat ? frostSplits(cat) : [];
+  el.innerHTML = `<dl class="kv">
+    <dt>base / split</dt><dd><span class="pill ${cls}" data-role="${esc(role)}">${esc(role)}</span> <span class="tiny">${why}</span></dd>
+    <dt>Play result</dt><dd>${res}</dd>
+    ${f.present ? `<dt>signature</dt><dd>${sig}</dd><dt>file digest</dt><dd>${dig}</dd>${binds}
+    <dt>frosting pairs</dt><dd>${f.duplicate_frosting_pairs ? `<span class="pill warn">${f.duplicate_frosting_pairs + 1} pairs</span> <span class="tiny">Play reads the first</span>` : "1"}${f.duplicate_v2_pairs ? ` · <span class="tiny">${f.duplicate_v2_pairs + 1} v2 pairs, the first is digested</span>` : ""}</dd>` : ""}
+    ${pb ? `<dt>frosting message</dt><dd>expires ${pb.expires_at_ms === null ? "—" : fmtMs(pb.expires_at_ms)} · sharing status ${pb.sharing_status ?? "—"}${pb.fields_unknown_total ? ` · ${pb.fields_unknown_total} unmodelled field(s)` : ""}</dd>
+    <dt>split catalog</dt><dd>${cat ? `${pb.catalog_size} split${pb.catalog_size === 1 ? "" : "s"}${pb.catalog_cut ? ` (${pb.catalog_size - pb.catalog_cut} listed)` : ""} <span class="tiny">${mine ? "whole-file SHA-256 of each split APK Play delivers with this base" : f.file_digest_match === false ? "Google-signed, but about ANOTHER file — not this APK's splits" : "Google-signed, but whether it is about this file is not judged — " + (DIGEST_REASON[f.digest_reason] ?? "")}</span>` : `<span class="pill na">none</span> <span class="tiny">${esc(pb.catalog_reason ?? "")}</span>`}</dd>` : ""}
+    ${f.protobuf_reason && f.protobuf_reason !== "unverified" ? `<dt>protobuf</dt><dd><span class="pill warn">${vis(f.protobuf_reason)}</span></dd>` : ""}
+  </dl>` + (rows.length ? `<div class="tablewrap scrollbox" style="margin-top:10px" tabindex="0" role="region" aria-label="Frosting split catalog"><table><thead><tr><th>module</th><th>split</th><th>sha256</th></tr></thead><tbody>` +
+    rows.map(([m, k, x]) => `<tr${mine ? "" : ' class="cond"'}><td>${esc(m)}</td><td>${esc(k)}</td><td>${x ? `<code data-split>${esc(splitId(x))}</code>` : ""}</td></tr>`).join("") + "</tbody></table></div>" : "") +
+    `<p class="note">Not AOSP: Play's frosting is read by the Play Store only; apkllm runs Play's observed check, its key and ECDSA judged by AOSP BoringSSL as Conscrypt calls them, under the built-in key recovered from Play signatures. Each split is named by the SHA-256 of its whole file (compare with the Build traces sha256 of the split).</p>`;
+}
+
 // Signer certificates (container.signing_certs, #58) ------------------------
 // The DN shown is `display`: the JDK 17 RFC 2253 string with controls / bidi / invisibles / space
 // runs escaped \u{XXXX} by the engine. Lookalike letters cannot be escaped — the attrs (as encoded)
 // and the sha256 are the exact identity.
+const strictNote = (c, note) => [note, c.strict_lengths === false ? `device X.509 parser refuses (non-DER length at ${c.strict_lengths_at ?? "?"})` : ""].filter(Boolean).join(" · ");
 const CERT_SCHEMES = [["v2", "v2"], ["v3", "v3"], ["v31", "v3.1"], ["source_stamp", "source stamp"]];
 const SIGNER_ERR = {
   "malformed signer": "apksig stops its signer walk here",
@@ -1606,6 +1731,8 @@ function certNotes(c) {
   if (c.error) n.push(`<span class="pill bad">${vis(c.error)}</span>`);
   if (c.jdk_rejects) n.push(`<span class="pill warn">JDK refuses: ${vis(c.jdk_rejects)}</span>`);
   if (c.encoding === "ber") n.push('<span class="pill warn">BER</span> <span class="tiny">apksig re-encodes it first</span>');
+  // #15 (D24): a non-DER length the device's X.509 parser (BoringSSL) reads — measured on Android 16
+  if (c.strict_lengths === false) n.push(`<span class="pill bad" data-strict="false">device X.509 parser refuses</span> <span class="tiny">non-DER length at ${vis(c.strict_lengths_at ?? "?")} (Android 16 measurement, D24)</span>`);
   if (c.trailing_bytes) n.push(`<span class="tiny">${c.trailing_bytes} trailing bytes</span>`);
   return n.join(" ");
 }
@@ -1668,7 +1795,9 @@ function renderCerts() {
     parts.push(`<h3 class="certh">v1 (JAR) <span class="tiny">${v1.files_total} signature block file${v1.files_total === 1 ? "" : "s"}${v1.files_total > v1.files.length ? ` (${v1.files.length} listed)` : ""}, read by the device's strict reader — apksig reads with its own, which can differ on a tampered container</span></h3>` +
       v1.files.map(f => {
         const sf = f.sf_present === true ? "" : f.sf_present === false ? ' <span class="pill warn">no .SF — apksig ignores it</span>' : ' <span class="pill na">.SF pairing unknown (name not UTF-8)</span>';
-        const head = `<p><code>${vis(f.name)}</code>${f.name_hex ? ` <span class="tiny">raw name ${f.name_hex}</span>` : ""}${sf}${f.read_error ? ` <span class="pill bad">${vis(f.read_error)}</span>` : ""}${f.error ? ` <span class="pill bad">${vis(f.error)}</span>` : ""}</p>`;
+        // #15: libcore re-encodes an indefinite-length wrapper before its CertificateFactory sees the bag
+        const indef = f.indefinite_wrappers ? ' <span class="pill na" data-indefinite>not judged</span> <span class="tiny">indefinite-length PKCS #7 wrappers — the device re-encodes them first, so no certificate here is judged by its bytes as present</span>' : "";
+        const head = `<p><code>${vis(f.name)}</code>${f.name_hex ? ` <span class="tiny">raw name ${f.name_hex}</span>` : ""}${sf}${indef}${f.read_error ? ` <span class="pill bad">${vis(f.read_error)}</span>` : ""}${f.error ? ` <span class="pill bad">${vis(f.error)}</span>` : ""}</p>`;
         const certs = f.certs.map((c, i) => certRow("bag", i, c)).join("") + (f.certs_total > f.certs.length ? `<tr><td colspan="8" class="tiny">${f.certs_total - f.certs.length} more certificates not listed</td></tr>` : "");
         // a structural pointer, never a trust signal (issuer + serial are copyable): no green pill
         const infos = f.signer_infos.map((v, i) => `<li>SignerInfo #${i}: <span class="pill ${v.cert_index !== null || v.match === "none" || v.match === "never" ? "na" : "warn"}">${esc(v.match)}</span>${v.cert_index !== null ? ` → bag cert ${v.cert_index}${v.cert_index >= f.certs.length ? " (not listed)" : ""}` : ""} <span class="tiny">${MATCH_NOTE[v.match] ?? ""}${v.issuer ? " · issuer " : ""}</span>${v.issuer ? dnCell(v.issuer) : ""}${v.serial !== null ? ` <span class="tiny">serial</span> <code>${vis(v.serial)}</code>` : ""}</li>`).join("");
