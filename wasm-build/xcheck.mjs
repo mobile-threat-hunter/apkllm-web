@@ -2,15 +2,17 @@
 // apkllm's native Python layer on the same APKs.
 //
 //   1. native:  cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -P \
-//                 ~/Project/apkllm-web/wasm-build/xcheck.py /tmp/native.json APK...
+//                 ~/Project/apkllm-web/wasm-build/xcheck.py /tmp/native.json APK... [--frost-key B64]
 //   2. wasm:    node xcheck.mjs /tmp/native.json
 //
-// Compares, per APK: content_map entries (content_type / category / detail /
-// unknown_kind / entropy / size_validated / encrypted_flag / role & extension
-// mismatch) + summary + checks; tamper_report findings + checks; install_gate
-// (native dict + checks) and extract_report (four-reader plan) for every input
-// combination xcheck.py ran; extract_entry sha256 for every entry. Any
-// difference is a bug in the port (domain.js) or the binding (wasm_module.cpp).
+// Since apkllm #67 every report is the engine's on both sides (pybind11 / embind convert the same
+// Value), so they are compared whole, key order included — except where the platform legitimately
+// differs: libziparchive iterates its hash table, keyed by std::hash<std::string_view>, which libc++
+// computes with murmur2 on a 32-bit size_t (wasm32) and CityHash64 on 64-bit. So per-entry rows
+// are compared by name (never by index), a histogram's tie order is not compared, and past build
+// traces' 64-name cap WHICH v1 signer files are kept differs (only the total and count are compared).
+// A JS object also lists integer-like keys first (app-metadata: compared sorted). Any other
+// difference is a bug in the binding (wasm_module.cpp) or domain.js.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -22,98 +24,67 @@ const D = globalThis.ApkllmDomain;
 const createApkllm = (await import("./build/apkllm.js")).default;
 
 const native = JSON.parse(readFileSync(argv[2], "utf8"));
+const keysets = native._frost_keysets; delete native._frost_keysets;
 const m = await createApkllm();
 const VFS = "/input.apk";
 let diffs = 0;
 
+// JSON.stringify keeps -0 as 0 and both sides' floats are the engine's: exact
 function diff(where, a, b) {
   const ja = JSON.stringify(a), jb = JSON.stringify(b);
   if (ja !== jb) { diffs++; console.log(`  DIFF ${where}\n    native: ${jb?.slice(0, 300)}\n    wasm:   ${ja?.slice(0, 300)}`); }
 }
-// Python repr differences that are not semantic: None→null handled by JSON; floats compared with tolerance.
-function cmpEntry(where, w, n) {
-  for (const k of ["name", "name_hex", "class", "method", "disposition", "content_type", "category", "detail", "unknown_kind", "size_validated", "encrypted_flag", "role_mismatch", "extension_mismatch", "error"])
-    diff(`${where}.${k}`, w[k] ?? null, n[k] ?? null);
-  const ew = w.entropy, en = n.entropy;
-  if ((ew == null) !== (en == null) || (ew != null && Math.abs(ew - en) > 0.0015)) diff(`${where}.entropy`, ew, en);
-}
-// libziparchive iterates its hash table, keyed by std::hash<std::string_view> — libc++
-// hashes with murmur2 on a 32-bit size_t (wasm32) and CityHash64 on 64-bit, so the
-// ENTRY ORDER legitimately differs between the wasm build and the x86-64 native build
-// (the wasm order is a 32-bit device's). Compare entries by name, never by index.
 const byName = (xs) => { const m = new Map(); for (const x of xs) m.set(x.name, (m.get(x.name) || []).concat([x])); return m; };
 const sortedObj = (o) => Object.fromEntries(Object.entries(o).sort());
-function cmpChecks(where, w, n) {
+// every row of `w` must equal one row of `n` with its name (several when names decode alike)
+function cmpRows(where, w, n) {
   diff(`${where}.length`, w.length, n.length);
-  for (let i = 0; i < Math.min(w.length, n.length); i++) {
-    const a = w[i], b = n[i];
-    for (const k of ["id", "ok", "severity", "reason"]) diff(`${where}[${a.id}].${k}`, a[k], b[k]);
-    diff(`${where}[${a.id}].detail`, a.detail ?? null, b.detail ?? null);
+  const nm = byName(n);
+  diff(`${where}.names`, [...byName(w).keys()].sort(), [...nm.keys()].sort());
+  for (const e of w) {
+    const cs = nm.get(e.name) || [];
+    const hit = cs.find(x => JSON.stringify(x) === JSON.stringify(e));
+    if (!hit) diff(`${where}[${e.name}]`, e, cs.find(x => x.name_hex === e.name_hex) || cs[0]);
   }
 }
+// a whole report: rows by name, the named histograms sorted, everything else exact (key order too)
+function cmpReport(where, w, n, rows = "entries", hists = []) {
+  diff(`${where}.keys`, Object.keys(w), Object.keys(n));
+  if (!w.ok || !n.ok) { diff(where, w, n); return; }
+  for (const k of Object.keys(n)) {
+    if (k === rows) cmpRows(`${where}.${k}`, w[k], n[k]);
+    else if (k === "summary") {
+      diff(`${where}.summary.keys`, Object.keys(w.summary), Object.keys(n.summary));
+      for (const s of Object.keys(n.summary))
+        diff(`${where}.summary.${s}`, hists.includes(s) ? sortedObj(w.summary[s]) : w.summary[s], hists.includes(s) ? sortedObj(n.summary[s]) : n.summary[s]);
+    } else diff(`${where}.${k}`, w[k], n[k]);
+  }
+}
+const GATE_ARGS = (key) => {
+  const [enl, tsdk, page, f] = JSON.parse(key);
+  const defaulted = !("apk_role" in f);
+  return [VFS, enl, tsdk, page, defaulted ? "base" : f.apk_role, defaulted,
+          f.isolated_splits ?? null, f.feature_split ?? null, f.config_for_split ?? null];
+};
+const der = (b64) => Uint8Array.from(Buffer.from(b64, "base64"));
 
-for (const [path, n] of Object.entries(native)) {
+for (const [path, n0] of Object.entries(native)) {
   console.log("---", path);
+  // an engine error names the file it opened: the native path there, the MEMFS file here
+  const n = JSON.parse(JSON.stringify(n0).split(JSON.stringify(path).slice(1, -1)).join(VFS));
   try { m.FS.unlink(VFS); } catch (_) {}
   m.FS.writeFile(VFS, new Uint8Array(readFileSync(path)));
 
-  // content
-  const heads = m.entryHeads(VFS, D.HEAD_BYTES, null);
-  const c = D.contentMap(heads, D.HEAD_BYTES);
-  diff("content.ok", c.ok, n.content.ok);
-  if (c.ok && n.content.ok) {
-    diff("content.entry_count", c.entry_count, n.content.entry_count);
-    const normSum = (s) => ({ ...s, by_content_type: sortedObj(s.by_content_type), by_category: sortedObj(s.by_category), unknown_by_kind: sortedObj(s.unknown_by_kind) });
-    const sumW = normSum(c.summary), sumN = normSum(n.content.summary);
-    diff("content.summary", sumW, sumN);
-    // check detail.sample: the first 20 in raw-name byte order on both sides (#49) — compared in
-    // order (libziparchive's own iteration is murmur2 on wasm32 vs CityHash on x86-64)
-    cmpChecks("content.checks", c.checks, n.content.checks);
-    const nm = byName(n.content.entries);
-    diff("content.names", [...byName(c.entries).keys()].sort(), [...nm.keys()].sort());
-    // names that decode alike (U+FFFD) have several candidates: compare against the closest one
-    const closest = (cands, e, keys) => cands.find(x => keys.every(k => JSON.stringify(x[k]) === JSON.stringify(e[k]))) || cands[0];
-    for (const e of c.entries) { const nn = closest(nm.get(e.name) || [], e, ["name_hex", "method", "content_type", "detail", "unknown_kind", "entropy", "size_validated"]); if (nn) cmpEntry(`content[${e.name}]`, e, nn); }
-  } else diff("content.error", c.error, n.content.error);
+  cmpReport("content", m.contentMap(VFS, D.HEAD_BYTES), n.content, "entries", ["by_content_type", "by_category", "unknown_by_kind"]);
+  // the raw walk is the CD's own order on both sides (not libziparchive's hash table): exact
+  diff("tamper", m.tamperReport(VFS), n.tamper);
 
-  // tamper
-  const t = m.tamperScan(VFS);
-  diff("tamper.ok", t.ok, n.tamper.ok);
-  if (t.ok && n.tamper.ok) {
-    for (const k of ["eocd_offset", "central_dir_offset", "central_dir_size", "cd_records", "signing_block_present", "libziparchive_would_open"]) diff(`tamper.${k}`, t[k], n.tamper[k]);
-    diff("tamper.findings", t.findings, n.tamper.findings);
-    diff("tamper.entries", t.entries, n.tamper.entries);
-    cmpChecks("tamper.checks", D.tamperChecks(t), n.tamper.checks);
-  } else diff("tamper.error", t.error, n.tamper.error);
-
-  // install gate, every case
   for (const [key, ng] of Object.entries(n.gate)) {
-    const [enl, tsdk, scope, page] = key.split("|").map(x => x === "None" ? null : x === "True" ? true : x === "False" ? false : Number(x));
-    const g = m.installGate(VFS, enl, tsdk, page, scope);
-    const w = `gate[${key}]`;
-    diff(`${w}.ok`, g.ok, ng.ok);
-    if (!g.ok || !ng.ok) { diff(`${w}.error`, g.error, ng.error); continue; }
-    for (const k of ["installable", "installable_if_extract_false", "installable_if_extract_true", "needs_manifest", "consistent_extract_native_libs", "extract_native_libs", "target_sdk", "in_base_asset_manager", "page_size", "entry_count"])
-      diff(`${w}.${k}`, g[k], ng[k]);
-    diff(`${w}.exceptions`, g.exceptions.map(i => g.entries[i].name).sort(), ng.exceptions.map(i => ng.entries[i].name).sort());
-    const gm = byName(ng.entries);
-    diff(`${w}.names`, [...byName(g.entries).keys()].sort(), [...gm.keys()].sort());
-    for (const e of g.entries) { const cs = gm.get(e.name) || []; const nn = cs.find(x => JSON.stringify(x) === JSON.stringify(e)) || cs[0]; if (nn) diff(`${w}[${e.name}]`, e, nn); }
-    // detail lists are in raw-name byte order on both sides (#49): compared as is, order included
-    cmpChecks(`${w}.checks`, D.containerChecks(g), ng.checks);
-
-    // four-reader decompression plan over the same gate
-    const nx = n.extract_report[key], x = D.extractReport(g), wx = `extract[${key}]`;
-    diff(`${wx}.ok`, x.ok, nx.ok);
-    if (!x.ok || !nx.ok) continue;
-    for (const k of ["extract_native_libs", "target_sdk", "entry_count"]) diff(`${wx}.${k}`, x[k], nx[k]);
-    const normX = (s) => ({ ...s, by_disposition: sortedObj(s.by_disposition), by_reader: sortedObj(s.by_reader) });
-    diff(`${wx}.summary`, normX(x.summary), normX(nx.summary));
-    cmpChecks(`${wx}.checks`, x.checks, nx.checks);   // raw-name order on both sides (#49)
-    const xm = byName(nx.entries);
-    const pick = (nn, e) => Object.fromEntries(Object.keys(e).map(k => [k, nn[k]]));
-    for (const e of x.entries) { const cs = xm.get(e.name) || []; const nn = cs.find(c => JSON.stringify(pick(c, e)) === JSON.stringify(e)) || cs.find(c => c.name_hex === e.name_hex) || cs[0]; if (nn) diff(`${wx}[${e.name}]`, e, pick(nn, e)); }
-    diff(`${wx}.keys`, Object.keys(x.entries[0] || {}).sort(), Object.keys(nx.entries[0] || {}).sort());
+    const args = GATE_ARGS(key);
+    const g = m.installGate(...args);
+    cmpReport(`gate[${key}]`, { ...g, exceptions: g.ok ? g.exceptions.map(i => g.entries[i].name).sort() : undefined },
+              { ...ng, exceptions: ng.ok ? ng.exceptions.map(i => ng.entries[i].name).sort() : undefined });
+    cmpReport(`extract[${key}]`, m.extractPlan(...args, true), n.extract_report[key], "entries", ["by_disposition", "by_reader"]);
   }
 
   // device-faithful bytes, every entry, via its own mapped reader
@@ -129,24 +100,24 @@ for (const [path, n] of Object.entries(native)) {
 
   // signing block — exact, key order included (domain.js builds the same insertion order)
   diff("signing_block", D.signingBlock(m.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS)), n.signing_block);
-
   // signer certificates (#58) — exact, key order included
-  diff("signing_certs", D.signingCerts(m.signingCerts(VFS)), n.signing_certs);
+  diff("signing_certs", m.signingCerts(VFS), n.signing_certs);
+  // frosting (#59) — exact, under every key set the native side ran
+  const sbW = D.signingBlock(m.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS)), trW = m.tamperReport(VFS);
+  keysets.forEach((ks, i) => {
+    const raw = m.frosting(VFS, ks.map(der));
+    diff(`frosting[keyset ${i}]`, raw, n.frosting[i]);
+    diff(`frosting_view[keyset ${i}]`, D.frostingView(raw, sbW, trW, i === 0 ? "builtin" : "caller"), n.frosting_view[i]);
+  });
+  diff("frosting.default_key", D.FROSTING_KEYS_DEFAULT, keysets[0]);
 
-  // build traces. Dicts keyed by attacker strings (app_metadata, unreadable) are compared sorted:
-  // a JS object puts integer-like keys first. Past the 64-name cap WHICH v1 signer files are kept
-  // follows libziparchive's hash-table iteration (murmur2 on wasm32 vs CityHash64 on x86-64), so
-  // there only the total and the count are compared.
-  const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
-  const bt = D.buildTraces(sha, m.entryNames(VFS, "META-INF/", D.V1_SIG_EXT, D.TRACE_LIST_CAP),
-                           m.entryHeads(VFS, D.TRACE_HEAD, [D.MANIFEST, D.APP_METADATA]));
-  const nb = n.build_traces;
   const normBT = (b) => {
     const o = { ...b };
     for (const k of ["app_metadata", "unreadable"]) if (o[k]) o[k] = sortedObj(o[k]);
-    if (o.v1_signer_files_total > D.TRACE_LIST_CAP) o.v1_signer_files = o.v1_signer_files.length;
+    if (o.v1_signer_files_total > 64) o.v1_signer_files = o.v1_signer_files.length;
     return o;
   };
+  const bt = m.buildTraces(VFS), nb = n.build_traces;
   diff("build_traces", normBT(bt), normBT(nb));
   if (bt.app_metadata) diff("build_traces.app_metadata.order", Object.keys(bt.app_metadata).filter(k => !/^(0|[1-9]\d*)$/.test(k)), Object.keys(nb.app_metadata).filter(k => !/^(0|[1-9]\d*)$/.test(k)));
 }

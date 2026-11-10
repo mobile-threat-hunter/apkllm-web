@@ -112,6 +112,19 @@ try {
   await evalJs(`(async()=>{const s=document.querySelector("#in-enl"); s.value="false"; s.dispatchEvent(new Event("change")); await new Promise(r=>setTimeout(r,800));})()`);
   const echoed = await evalJs(`document.querySelector("#gate-verdict").textContent`);
   if (gateOpened && !echoed.includes("extractNativeLibs=false")) fail("gate did not re-run on input change: " + echoed.slice(0, 200));
+  // a targetSdk Python refuses is refused at the field: the last accepted value comes back, and the
+  // gate shown still is the one for the shown inputs
+  const bad = JSON.parse(await evalJs(`(async()=>{const s=document.querySelector("#in-tsdk"), before=report.gate;
+    s.value="30.7"; s.dispatchEvent(new Event("change")); await new Promise(r=>setTimeout(r,500));
+    return JSON.stringify({ value: s.value, err: document.querySelector("#in-err").textContent, same: report.gate === before }); })()`));
+  if (bad.value !== "" || !/must be an integer/.test(bad.err) || !bad.same) fail("a non-integer targetSdk was not refused at the field: " + JSON.stringify(bad));
+  // the split facts reach the engine (#67 step 3: apk_role / isolatedSplits replace the old scope input)
+  const role = JSON.parse(await evalJs(`(async()=>{const set=(q,v)=>{const s=document.querySelector(q); s.value=v; s.dispatchEvent(new Event("change"));};
+    set("#in-role","split"); set("#in-iso","true"); await new Promise(r=>setTimeout(r,800));
+    const g = report.gate, out = { role: g.apk_role, source: g.apk_role_source, iso: g.isolated_splits, shown: document.querySelector("#gate-verdict").textContent.includes("apk_role=split") };
+    set("#in-role","default"); set("#in-iso",""); await new Promise(r=>setTimeout(r,800));
+    out.back = report.gate.apk_role_source; return JSON.stringify(out); })()`));
+  if (gateOpened && (role.role !== "split" || role.source !== "supplied" || role.iso !== true || !role.shown || role.back !== "default")) fail("split facts not passed to / echoed by the engine: " + JSON.stringify(role));
   // content hex view on first row
   await evalJs(`(()=>{const tr=document.querySelector("#content-table tbody tr"); if(tr) tr.click(); return true;})()`);
   const hexLen = await evalJs(`(document.querySelector("#content-hex pre")||{textContent:""}).textContent.length`);
@@ -511,6 +524,32 @@ try {
   if (ct.nodeRows !== ct.nodesListed) fail(`${ct.nodeRows} lineage node rows ≠ ${ct.nodesListed} listed nodes`);
   if (ct.pills !== ct.pillsWant) fail(`${ct.pills} mismatch pills ≠ ${ct.pillsWant} mismatching lineages`);
   if (ct.xMarks !== ct.xWant) fail(`${ct.xMarks} ✗ marks ≠ ${ct.xWant} nodes of a failing attribute`);
+  // #15: one refusal pill per listed certificate (signers, lineage nodes, v1 bags) with strict_lengths false,
+  // one "not judged" per v1 file with indefinite wrappers
+  const sl = JSON.parse(await evalJs(`(() => { const r = report.certs, body = document.querySelector("#certs-body");
+    if (!r.ok) return JSON.stringify({ ok: false });
+    const certs = ["v2", "v3", "v31", "source_stamp"].flatMap(k => (r[k]?.signers ?? []).flatMap(g => g.certs.concat((g.lineage?.nodes ?? []).map(n => n.cert).filter(Boolean)))).concat(r.v1.files.flatMap(f => f.certs));
+    return JSON.stringify({ ok: true, strict: body.querySelectorAll("[data-strict]").length, strictWant: certs.filter(c => c.strict_lengths === false).length,
+      indef: body.querySelectorAll("[data-indefinite]").length, indefWant: r.v1.files.filter(f => f.indefinite_wrappers).length }); })()`));
+  if (sl.ok && (sl.strict !== sl.strictWant || sl.indef !== sl.indefWant)) fail("strict_lengths / indefinite_wrappers notes ≠ the engine's: " + JSON.stringify(sl));
+  // Play frosting (#59): split hashes appear only under a verified signature, one row per catalog item
+  const fz = JSON.parse(await evalJs(`(() => { const f = report.frosting, body = document.querySelector("#frosting-body");
+    const cat = f.ok && f.signature === true ? f.protobuf?.catalog : null;
+    return JSON.stringify({ ok: f.ok, result: f.play_result ?? null, sig: f.signature ?? null, digest: f.file_digest_match ?? null,
+      role: body.querySelector("[data-role]")?.dataset.role ?? null, rows: body.querySelectorAll("tbody tr").length,
+      rowsWant: cat ? frostSplits(cat).length : 0, hashes: body.querySelectorAll("[data-split]").length, copy: COPY.frosting(),
+      binds: [...body.querySelectorAll("dt")].some(dt => dt.textContent === "binds"), claim: frostClaim(f),
+      unbound: body.querySelectorAll("[data-unbound]").length, unboundWant: f.ok && f.uncovered_signer_schemes?.length ? 1 : 0,
+      raw: new RegExp(INVIS_RE.source).test(body.textContent.replace(/[\\t\\n\\r]/g, "")) || new RegExp(INVIS_RE.source).test(COPY.frosting().replace(/[\\t\\n\\r]/g, "")) }); })()`));
+  console.log("frosting:", JSON.stringify({ ...fz, copy: fz.copy.length }));
+  if (!fz.role) fail("frosting card has no base / split hint");
+  if (fz.sig !== true && fz.hashes) fail("split hashes shown without a verified frosting signature");
+  if (fz.rows !== fz.rowsWant) fail(`frosting catalog ${fz.rows} rows ≠ ${fz.rowsWant} catalog items`);
+  if (fz.role === "base" && !(fz.sig === true && fz.digest === true)) fail("base hint without a verified, matching frosting");
+  if (!fz.copy) fail("frosting copy is empty");
+  if (fz.unbound !== (fz.claim ? fz.unboundWant : 0)) fail("a v3 / v3.1 signer the frosting does not bind is not flagged");
+  if (fz.binds !== fz.claim) fail("the frosting 'binds' row shown without a verified frosting about this file (or missing with one)");
+  if (fz.raw) fail("an invisible character reached the frosting card or its copy");
   if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
     for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);

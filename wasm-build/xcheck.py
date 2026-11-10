@@ -1,60 +1,40 @@
 #!/usr/bin/env python3
 """Native ground truth for xcheck.mjs: run apkllm's REAL Python layer on APKs and dump
-exactly the objects the web demo derives in JS (domain.js over the wasm engine).
+exactly the objects the web demo shows (the wasm engine, plus domain.js's signing_block).
 
     cd ~/Project/apkllm && PYTHONPATH=src .venv/bin/python -P \
-        ~/Project/apkllm-web/wasm-build/xcheck.py OUT.json APK...
+        ~/Project/apkllm-web/wasm-build/xcheck.py OUT.json APK... [--frost-key B64]...
 
-Per APK: content_map (magic typing + checks), tamper_report (findings + checks) and
-install_gate's native dict + _container_checks for each arsc_scope / extractNativeLibs
-combination the UI can select (the Python install_gate wrapper derives arsc_scope from
-role facts; the demo takes the scope directly, so the core binding is called the same way
-wasm_module.cpp is). Plus extract_report (the four-reader decompression plan) per case and
-extract_entry over every entry name — sha256 of the device-faithful bytes or the error.
-And the structural signing-side reads: signing_block (the APK Signing Block's pairs) and
-build_traces (v1 signer files, MANIFEST.MF main section, AGP app-metadata), signing_certs (#58).
+Per APK: content_map, tamper_report, install_gate and extract_report for each manifest /
+split-fact combination in GATE_CASES (since apkllm #67 all four are the engine's, passed
+through by Python as by the web), extract_entry over every entry name (sha256 of the
+device-faithful bytes, or the error), signing_block, build_traces, signing_certs (#58), and the
+engine's frosting check (#59) and signing.frosting's view of it under the built-in key — plus under each --frost-key (a test key
+crafted fixtures are signed with).
 """
+import base64
 import hashlib
 import json
 import sys
 
-import apkllm
-from apkllm import container
+from apkllm import container, signing
 
 core = container._core()
 
-GATE_CASES = [  # (extract_native_libs, target_sdk, arsc_scope, page_size)
-    (None, None, None, 4096),
-    (None, None, True, 4096),
-    (True, 34, True, 4096),
-    (False, 30, True, 4096),
-    (None, 29, False, 4096),
-    (False, 35, True, 16384),
+# (extract_native_libs, target_sdk, page_size, role facts); "default" = apk_role left out
+GATE_CASES = [
+    (None, None, 4096, {}),
+    (None, 29, 4096, {"apk_role": None}),
+    (True, 34, 4096, {"apk_role": "base"}),
+    (False, 30, 4096, {}),
+    (None, 30, 4096, {"apk_role": "split", "isolated_splits": True, "feature_split": False}),
+    (False, 35, 16384, {"apk_role": "split", "config_for_split": True}),
+    (None, 35, 4096, {"feature_split": True}),
 ]
 
 
-def gate(path, enl, tsdk, scope, page):
-    r = core.install_gate(path, enl, tsdk, page, arsc_scope=scope)
-    if r.get("ok"):
-        r["checks"] = container._container_checks(r)
-    return r
-
-
-def extract_report(path, enl, tsdk, scope, page):
-    """The REAL container.extract_report, fed the same core gate the demo uses (arsc_scope
-    given directly instead of derived from role facts)."""
-    def core_gate(p, **kw):
-        r = gate(p, enl, tsdk, scope, page)
-        if r.get("ok"):  # role echo is the Python wrapper's; never compared
-            r.update({k: r.get(k) for k in container.ROLE_ECHO_KEYS})
-        return r
-
-    real = container.install_gate
-    container.install_gate = core_gate
-    try:
-        return container.extract_report(path, extract_native_libs=enl, target_sdk=tsdk, page_size=page)
-    finally:
-        container.install_gate = real
+def case_key(enl, tsdk, page, facts):
+    return json.dumps([enl, tsdk, page, facts], sort_keys=True)
 
 
 def extracted(path, names):
@@ -63,7 +43,7 @@ def extracted(path, names):
     out = {}
     for n in dict.fromkeys(names):
         key = bytes.fromhex(n[2:]) if n.startswith("x:") else n[2:]
-        r = core.extract_entry(path, key, 512 * 1024 * 1024)
+        r = core.extract_entry(container._native_path(path), key, 512 * 1024 * 1024)
         out[n] = (
             {"ok": True, "disposition": r["disposition"], "size": len(r["data"]),
              "sha256": hashlib.sha256(r["data"]).hexdigest()}
@@ -72,37 +52,59 @@ def extracted(path, names):
     return out
 
 
-def main(out, apks):
-    res = {}
+def exact(o):
+    """An int past 2**53 as its decimal string — what the binding hands JS (a double would round it,
+    and JSON.parse on the dump would round it the SAME way, hiding the loss)."""
+    if isinstance(o, bool):
+        return o
+    if isinstance(o, int):
+        return str(o) if abs(o) > 1 << 53 else o
+    if isinstance(o, dict):
+        return {k: exact(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [exact(v) for v in o]
+    return o
+
+
+def main(out, apks, frost_keys):
+    keysets = [list(signing.FROSTING_KEYS_DEFAULT)] + [[k] for k in frost_keys]
+    res = {"_frost_keysets": keysets}
     for p in apks:
-        c = container.content_map(p)
         t = container.tamper_report(p)
-        g0 = gate(p, None, None, None, 4096)
+        gates = {case_key(*c): container.install_gate(p, extract_native_libs=c[0], target_sdk=c[1], page_size=c[2], **c[3])
+                 for c in GATE_CASES}
+        g0 = gates[case_key(*GATE_CASES[0])]
+
         def key(e):
             return "x:" + e["name_hex"] if e.get("name_hex") else "s:" + e["name"]
 
         names = [key(e) for e in g0["entries"]] if g0.get("ok") else [
             key(e) for e in (t.get("entries") or [])]
         res[p] = {
-            "content": c,
+            "content": container.content_map(p),
             "tamper": t,
-            "gate": {
-                f"{enl}|{tsdk}|{scope}|{page}": gate(p, enl, tsdk, scope, page)
-                for enl, tsdk, scope, page in GATE_CASES
-            },
+            "gate": gates,
             "extract_report": {
-                f"{enl}|{tsdk}|{scope}|{page}": extract_report(p, enl, tsdk, scope, page)
-                for enl, tsdk, scope, page in GATE_CASES
+                case_key(*c): container.extract_report(p, extract_native_libs=c[0], target_sdk=c[1], page_size=c[2], **c[3])
+                for c in GATE_CASES
             },
             "extracted": extracted(p, names),
             "signing_block": container.signing_block(p),
             "build_traces": container.build_traces(p),
             "signing_certs": container.signing_certs(p),
+            "frosting": [core.frosting(container._native_path(p), [base64.b64decode(k) for k in ks]) for ks in keysets],
+            # signing.frosting's view (claim rules + container view) — domain.js frostingView mirrors it
+            "frosting_view": [signing.frosting(p, frosting_keys=ks) for ks in keysets],
         }
     with open(out, "w") as f:
-        json.dump(res, f, default=lambda o: list(o) if isinstance(o, (set, bytes)) else str(o))
+        json.dump(exact(res), f, default=lambda o: list(o) if isinstance(o, (set, bytes)) else str(o))
     print("wrote", out, "for", len(apks), "apk(s)")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2:])
+    args, keys, i = sys.argv[2:], [], 0
+    while "--frost-key" in args:
+        i = args.index("--frost-key")
+        keys.append(args[i + 1])
+        del args[i : i + 2]
+    main(sys.argv[1], args, keys)

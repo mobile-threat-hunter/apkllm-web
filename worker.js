@@ -9,11 +9,13 @@
 // Protocol (postMessage; each call carries an opaque `id` the worker echoes):
 //   main → worker: { id, type: "init",    buildSha: string }
 //                  { id, type: "load",    bytes: Uint8Array }
-//                      → { tamper, signing, traces, certs, content, input: {md5, sha256, size} }   (the manifest-independent reads)
-//                  { id, type: "gate",    extractNativeLibs: bool|null, targetSdk: number|null,
-//                                         pageSize: number, arscScope: bool|null }
-//                      → installGate(...) + checks[]      (re-run whenever the user changes an input)
-//                      (result.extract = the four-reader decompression plan over it)
+//                      → { tamper, signing, traces, certs, frosting, content, input: {md5, sha256, size} }
+//                        (the manifest-independent reads)
+//                  { id, type: "gate",    extractNativeLibs: bool|null, targetSdk: number|null, pageSize: number,
+//                                         apkRole: "base"|"split"|null, roleDefaulted: bool,
+//                                         isolatedSplits / featureSplit / configForSplit: bool|null }
+//                      → installGate(...) with its checks[]   (re-run whenever the user changes an input)
+//                      (result.extract = extract_report: the four-reader decompression plan)
 //                  { id, type: "extract", name: string, name_hex: string|null }
 //                      → extractEntry(...) with .data transferred
 //                  { id, type: "bundle",  indices: number[] (into the gate's entries), source: {name,size}, params: <gate params> }
@@ -27,8 +29,9 @@
 //                  { id, progress: { done, total } }   (bundle only; any number, before the result)
 //   main → worker: { type: "cancel" }   (no reply; aborts a running bundle → "cancelled")
 //
-// The domain layer (domain.js — apkllm's Python policy ported) runs here too,
-// so the main thread receives finished report objects.
+// Every report is the engine's own (apkllm #67: decided whole in C++, converted one to one by
+// wasm_module.cpp); domain.js adds only what apkllm still decides in Python (signing_block's
+// pair names) and the built-in frosting key. The main thread receives finished report objects.
 
 let BUILD_SHA = "";
 let CREATE = null;
@@ -48,7 +51,11 @@ function ensureInit() {
   if (initPromise) return initPromise;
   if (!CREATE) bootstrap();
   const qs = BUILD_SHA ? "?v=" + BUILD_SHA : "";
-  initPromise = CREATE({ locateFile: f => f + qs }).then(m => { Module = m; });
+  initPromise = CREATE({ locateFile: f => f + qs }).then(m => {
+    // a stale cached apkllm.wasm next to a newer page would hand it another result shape
+    if (m.abi() !== self.ApkllmDomain.ENGINE_ABI) throw new Error(`engine ABI ${m.abi()} — this page expects ${self.ApkllmDomain.ENGINE_ABI}; reload without cache`);
+    Module = m;
+  });
   return initPromise;
 }
 
@@ -78,35 +85,46 @@ function writeInput(bytes) {
   loaded = true;
 }
 
-// The manifest-independent reads, once per load. entryHeads is bounded per
-// entry (the engine stops each reader after HEAD_BYTES), so this is the whole
-// archive's worth of device-produced heads.
+// The manifest-independent reads, once per load. Each entry's head is bounded (the engine stops
+// its reader after HEAD_BYTES), so content_map and the hex view cost one head per entry each.
 let INPUT = null;   // { md5, sha256, size } of the loaded APK — names its {md5}.json report
 async function load(bytes) {
   INPUT = { md5: md5hex(bytes), sha256: await sha256hex(bytes), size: bytes.length };
   writeInput(bytes);
   const D = self.ApkllmDomain;
-  const tamper = Module.tamperScan(VFS);
-  if (tamper.ok) tamper.checks = D.tamperChecks(tamper);
+  const tamper = Module.tamperReport(VFS);
   const signing = D.signingBlock(Module.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS));
-  const traces = D.buildTraces(INPUT.sha256, Module.entryNames(VFS, "META-INF/", D.V1_SIG_EXT, D.TRACE_LIST_CAP),
-                               Module.entryHeads(VFS, D.TRACE_HEAD, [D.MANIFEST, D.APP_METADATA]));
-  const certs = D.signingCerts(Module.signingCerts(VFS));
-  const heads = Module.entryHeads(VFS, D.HEAD_BYTES, null);
-  const content = D.contentMap(heads, D.HEAD_BYTES);
-  // the raw device-produced heads ride along (parallel to content.entries) for the hex view
-  if (content.ok) content.heads = heads.entries.map(h => ({ name: h.name, disposition: h.disposition, complete: h.complete, head: h.head }));
-  return { tamper, signing, traces, certs, content, input: INPUT };
+  const traces = Module.buildTraces(VFS);
+  const certs = Module.signingCerts(VFS);
+  const frosting = D.frostingView(Module.frosting(VFS, D.frostingKeys()), signing, tamper);
+  const content = Module.contentMap(VFS, D.HEAD_BYTES);
+  // the raw device-produced heads ride along (parallel to content.entries — the same libziparchive
+  // walk) for the hex view; a row whose name differs gets none rather than another entry's bytes
+  if (content.ok) {
+    const heads = Module.entryHeads(VFS, D.HEAD_BYTES, null);
+    content.heads = content.entries.map((e, i) => {
+      const h = heads.ok ? heads.entries[i] : undefined;
+      return h && h.name === e.name && h.name_hex === e.name_hex
+        ? { name: h.name, disposition: h.disposition, complete: h.complete, head: h.head } : null;
+    });
+  }
+  return { tamper, signing, traces, certs, frosting, content, input: INPUT };
 }
 
 function gate(p) {
   if (!loaded) throw new Error("no APK loaded");
-  const r = Module.installGate(VFS, p.extractNativeLibs ?? null, p.targetSdk ?? null,
-                               p.pageSize ?? 4096, p.arscScope ?? null);
-  if (r.ok) {
-    r.checks = self.ApkllmDomain.containerChecks(r);
-    r.extract = self.ApkllmDomain.extractReport(r);
-  }
+  // the checks Python makes before the engine runs (container._gate_args; pybind11's int cast):
+  // embind would truncate 30.7 to 30 and clamp 1e10 — refuse instead, as Python raises
+  const ps = p.pageSize ?? 4096, tsdk = p.targetSdk ?? null;
+  if (!Number.isInteger(ps) || ps <= 0 || ps >= 2 ** 63 || !Number.isInteger(Math.log2(ps))) throw new Error("page_size must be a positive power of two < 2**63");
+  if (tsdk !== null && !(Number.isInteger(tsdk) && tsdk >= -(2 ** 31) && tsdk < 2 ** 31)) throw new Error(`targetSdk must be an integer, got ${tsdk}`);
+  // module.cpp's argument list; apk_role left out = "base" assumed (the one documented assumption)
+  const defaulted = p.apkRole === undefined;
+  const args = [VFS, p.extractNativeLibs ?? null, tsdk, ps,
+                defaulted ? "base" : p.apkRole, defaulted, p.isolatedSplits ?? null,
+                p.featureSplit ?? null, p.configForSplit ?? null];
+  const r = Module.installGate(...args);
+  if (r.ok) r.extract = Module.extractPlan(...args, true);
   return r;
 }
 
@@ -297,7 +315,9 @@ const NAMING = "apkllm naming: a file is {md5}.bin of its CONTENT (never the ent
 const reportHead = (g, msg) => ({
   tool: "apkllm-web", build: BUILD_SHA,
   input: { name: msg.source?.name ?? null, size: INPUT.size, md5: INPUT.md5, sha256: INPUT.sha256 },
-  inputs: { extract_native_libs: g.extract_native_libs, target_sdk: g.target_sdk, in_base_asset_manager: g.in_base_asset_manager, page_size: g.page_size },
+  inputs: { extract_native_libs: g.extract_native_libs, target_sdk: g.target_sdk, apk_role: g.apk_role, apk_role_source: g.apk_role_source,
+            isolated_splits: g.isolated_splits, feature_split: g.feature_split, config_for_split: g.config_for_split,
+            in_base_asset_manager: g.in_base_asset_manager, page_size: g.page_size },
   rule: RULE, naming: NAMING,
 });
 

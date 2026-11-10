@@ -1,39 +1,51 @@
 // wasm_module.cpp — embind binding mirroring apkllm's native/binding/module.cpp
 // (the pybind11 _apk_core) for the apkllm-web in-browser demo. ADAPTER ONLY:
-// same functions, same field names, same tri-state semantics — it calls the
-// container layer and marshals results to JS; no parsing/verdict policy lives
-// here (the faithfulness boundary).
+// same functions, same field names, same key order, same tri-state semantics — it
+// calls the engine and marshals results to JS; no parsing/verdict policy lives
+// here (the faithfulness boundary). Since apkllm #67 every report is decided whole
+// in the engine (an ordered apkllm::Value); ToVal converts it one to one, as
+// module.cpp's ToPy does.
 //
 // Single-threaded WASM build (GitHub Pages can't serve the COOP/COEP headers
 // SharedArrayBuffer needs). The APK is written to MEMFS by the caller and
 // every function takes its path, exactly like the Python binding.
 //
 // JS API (module-level functions, all return plain JS objects):
-//   installGate(path, extractNativeLibs: boolean|null, targetSdk: number|null,
-//               pageSize: number, arscScope: boolean|null)
+//   abi()                                   // module.cpp's ABI (12) — the worker refuses another
+//   installGate(path, extractNativeLibs: boolean|null, targetSdk: number|null, pageSize: number,
+//               apkRole: "base"|"split"|null, roleDefaulted: boolean,
+//               isolatedSplits: boolean|null, featureSplit: boolean|null, configForSplit: boolean|null)
+//   extractPlan(path, <the installGate arguments after path>, report: boolean)
+//                                           // extract_map (false) / extract_report (true)
 //   extractEntry(path, name, maxBytes)      // name: string, or Uint8Array of raw bytes (name_hex)
 //                                           // .data is a Uint8Array copy
 //   entryHeads(path, n, names: string[]|null) // each .head is a Uint8Array copy
-//   entryNames(path, prefix, suffixes: string[], cap)
+//   contentMap(path, headBytes)
+//   tamperReport(path)
 //   signingBlockPairs(path, cap, track: number[])
+//   buildTraces(path)
 //   signingCerts(path)                      // #58: signer certificates as present, unverified
-//   tamperScan(path)
+//   frosting(path, keys: Uint8Array[])      // #59: Play's frosting check, keys = DER SPKIs
 // (embind checks the argument count: every argument is passed, null for Python's None default.)
 //
 // Differences forced by the JS side, none of them policy:
 //   - Python None ⇄ JS null/undefined for the tri-state inputs and outputs.
-//   - 64-bit integers cross as JS numbers (double). ZIP offsets/sizes are
-//     < 2^53 for any APK a browser can hold, so this is lossless in practice.
+//   - 64-bit integers cross as JS numbers when exact (|v| <= 2^53), else as their decimal string:
+//     a DECLARED size is attacker-chosen (a ZIP64 extra can claim 2^60), and a double would show
+//     other digits than Python's int. No BigInt: it breaks JSON.stringify (reports, copy).
 //   - Entry names are attacker-controlled bytes (libziparchive accepts overlong /
 //     surrogate / 5-byte sequences). embind's own std::string→JS conversion is
 //     NOT the U+FFFD contract module.cpp's SafeStr gives Python: for strings
 //     ≤16 bytes emscripten's UTF8ToString uses a non-validating hand decoder
 //     (C0 80 → NUL, ED A0 80 → lone surrogate, F8.. swallows following bytes),
 //     and the TextDecoder path it uses for longer strings eats a leading BOM.
-//     So every attacker-controlled string crosses as raw bytes and is decoded
+//     So every string that is not plain ASCII crosses as raw bytes and is decoded
 //     here by a WHATWG TextDecoder("utf-8", {ignoreBOM:true}) — non-fatal
 //     replacement matches Python's errors="replace" byte-for-byte (verified in
 //     review on the overlong / surrogate / 5-byte / truncated cases).
+//   - A map key the engine computed (an attacker string: app-metadata keys, a content
+//     type histogram) is defined as an own property, so "__proto__" stays a key. A JS
+//     object lists integer-like keys first, in ascending order — display only.
 //   - A lossy name also carries name_hex (module.cpp's LossyHex, here StrictUtf8 — CPython's
 //     strict decoder); extractEntry takes those bytes back as a Uint8Array where Python takes bytes.
 
@@ -50,13 +62,21 @@
 #include "apksig.h"
 #include "certs.h"
 #include "container.h"
-#include "tamper.h"
+#include "content_map.h"
+#include "frosting.h"
+#include "plan.h"
+#include "tamper_report.h"
+#include "traces.h"
+#include "value.h"
 
 using emscripten::function;
 using emscripten::typed_memory_view;
 using emscripten::val;
 
 namespace {
+
+// module.cpp's ABI: the marshalled shape's version (12 = frosting, apkllm #59).
+constexpr int kAbi = 12;
 
 // liblog's host logger (__android_log_stderr_logger → filestream_logger → GetThreadId)
 // has no branch for a platform that is none of __BIONIC__/__APPLE__/__linux__/_WIN32,
@@ -75,9 +95,13 @@ struct InstallLogger {
     InstallLogger() { __android_log_set_logger(&WasmStderrLogger); }
 } g_install_logger;
 
-// uint64 → JS number. See the header comment on range.
-double Num(uint64_t v) { return static_cast<double>(v); }
-double Num(int64_t v) { return static_cast<double>(v); }
+// 64-bit integer → JS: a number when exact, else its decimal string (see the header comment).
+constexpr uint64_t kExact = 1ull << 53;
+val Num(uint64_t v) { return v <= kExact ? val(static_cast<double>(v)) : val(std::to_string(v)); }
+val Num(int64_t v) {
+    const uint64_t mag = v < 0 ? 0 - static_cast<uint64_t>(v) : static_cast<uint64_t>(v);
+    return mag <= kExact ? val(static_cast<double>(v)) : val(std::to_string(v));
+}
 
 // Copy bytes out of a std::string into a fresh Uint8Array owned by JS.
 // `new Uint8Array(view)` copies, so the view over wasm memory never outlives
@@ -87,8 +111,12 @@ val Bytes(const std::string& s) {
         s.size(), reinterpret_cast<const uint8_t*>(s.data()))));
 }
 
-// SafeStr equivalent (see header): raw bytes → JS string with U+FFFD replacement.
+// SafeStr equivalent (see header): raw bytes → JS string with U+FFFD replacement. Plain ASCII
+// (no NUL) is the same string under every decoder, so it skips the TextDecoder round trip.
 val SafeStr(const std::string& s) {
+    bool ascii = true;
+    for (unsigned char c : s) ascii &= c != 0 && c < 0x80;
+    if (ascii) return val(s);
     static val decoder = [] {
         val opts = val::object();
         opts.set("ignoreBOM", true);
@@ -134,115 +162,108 @@ val NameHex(const std::string& s) {
     return val(h);
 }
 
-val Strings(const std::vector<std::string>& v) {
-    val arr = val::array();
-    for (size_t i = 0; i < v.size(); ++i) arr.set(i, v[i]);
-    return arr;
-}
-
 bool IsNone(const val& v) { return v.isNull() || v.isUndefined(); }
 
-const char* ClassName(apkllm::EntryClass k) {
-    switch (k) {
-        case apkllm::EntryClass::kNativeLib: return "native_lib";
-        case apkllm::EntryClass::kDex: return "dex";
-        case apkllm::EntryClass::kManifest: return "manifest";
-        case apkllm::EntryClass::kResource: return "resource";
-        case apkllm::EntryClass::kResourcesArsc: return "resources_arsc";
-        case apkllm::EntryClass::kMeta: return "meta";
-        default: return "other";
-    }
+const char* ClassName(apkllm::EntryClass k) { return apkllm::EntryClassName(k); }
+
+// An attacker-chosen key as an own data property ("__proto__" included — never the prototype).
+void DefineKey(val& obj, const val& key, const val& value) {
+    val desc = val::object();
+    desc.set("value", value);
+    desc.set("writable", true);
+    desc.set("enumerable", true);
+    desc.set("configurable", true);
+    val::global("Object").call<void>("defineProperty", obj, key, desc);
 }
 
-// Enumerate APK entries through real libziparchive and apply the install/load
-// gates. extract_native_libs / target_sdk / arsc_scope are the manifest-owned
-// inputs the USER supplies in the UI (null = unknown → honest conditional verdict).
-val InstallGate(const std::string& path, val extract_native_libs, val target_sdk,
-                double page_size, val arsc_scope) {
-    apkllm::ExtractNativeLibs extract = apkllm::ExtractNativeLibs::kUnknown;
-    if (!IsNone(extract_native_libs)) {
-        extract = extract_native_libs.as<bool>() ? apkllm::ExtractNativeLibs::kTrue
-                                                 : apkllm::ExtractNativeLibs::kFalse;
+// An engine-decided result as JS objects, one to one (module.cpp ToPy): a map keeps its keys in
+// order, every string is decoded as CPython's UTF-8 "replace". Consumes the tree: each list / map
+// is freed once converted, and a generated per-entry list makes each row only as it converts it.
+val ToVal(apkllm::Value& v) {
+    using K = apkllm::Value::Kind;
+    switch (v.kind) {
+        case K::kNull: return val::null();
+        case K::kBool: return val(v.b);
+        case K::kInt: return Num(static_cast<int64_t>(v.i));
+        case K::kUInt: return Num(static_cast<uint64_t>(v.u));
+        case K::kFloat: return val(v.f);
+        case K::kStr: return SafeStr(v.str());
+        case K::kList: {
+            val l = val::array();
+            unsigned k = 0;
+            for (auto& x : v.items->list) l.set(k++, ToVal(x));
+            for (size_t i = 0; i < v.items->gen_n; i++) {
+                apkllm::Value row = v.items->gen(i);
+                l.set(k++, ToVal(row));
+            }
+            v.items.reset();
+            return l;
+        }
+        case K::kMap: {
+            val d = val::object();
+            for (auto& kv : v.items->map) {
+                // an owned key is computed (attacker text possible); a literal one is a fixed name
+                bool owned = false;
+                for (const auto& o : v.items->owned) owned |= o->c_str() == kv.first;
+                if (owned)
+                    DefineKey(d, SafeStr(kv.first), ToVal(kv.second));
+                else
+                    d.set(kv.first, ToVal(kv.second));
+            }
+            v.items.reset();
+            return d;
+        }
     }
-    int tsdk = IsNone(target_sdk) ? -1 : target_sdk.as<int>();
-    apkllm::ArscScope scope = apkllm::ArscScope::kUnknown;
-    if (!IsNone(arsc_scope)) {
-        scope = arsc_scope.as<bool>() ? apkllm::ArscScope::kInBase : apkllm::ArscScope::kNotInBase;
-    }
-    // A negative/fractional page size from JS would wrap to a huge uint64; clamp to 0 so
-    // the engine's own "page_size must be > 0" guard reports it.
-    uint64_t ps = page_size > 0 ? static_cast<uint64_t>(page_size) : 0;
+    return val::null();
+}
 
-    val out = val::object();
-    apkllm::InstallGate g = apkllm::ComputeInstallGate(path, extract, tsdk, ps, scope);
-    out.set("ok", g.ok);
-    if (!g.ok) {
-        out.set("error", g.error);
-        return out;
-    }
-    if (g.installable_known)
-        out.set("installable", g.installable);
-    else
-        out.set("installable", val::null());
-    out.set("installable_if_extract_false", g.installable_if_extract_false);
-    out.set("installable_if_extract_true", g.installable_if_extract_true);
-    out.set("needs_manifest", g.needs_manifest);
-    // Which extractNativeLibs values the container is consistent with — a container
-    // FACT re-expressed from the two branch verdicts (module.cpp does the same).
-    val consistent_extract = val::array();
-    {
-        size_t i = 0;
-        if (g.installable_if_extract_false) consistent_extract.set(i++, std::string("false"));
-        if (g.installable_if_extract_true) consistent_extract.set(i++, std::string("true"));
-    }
-    out.set("consistent_extract_native_libs", consistent_extract);
-    if (g.extract_native_libs == apkllm::ExtractNativeLibs::kUnknown)
-        out.set("extract_native_libs", val::null());
-    else
-        out.set("extract_native_libs", g.extract_native_libs == apkllm::ExtractNativeLibs::kTrue);
-    if (g.target_sdk < 0)
-        out.set("target_sdk", val::null());
-    else
-        out.set("target_sdk", g.target_sdk);
-    if (g.arsc_scope == apkllm::ArscScope::kUnknown)
-        out.set("in_base_asset_manager", val::null());
-    else
-        out.set("in_base_asset_manager", g.arsc_scope == apkllm::ArscScope::kInBase);
-    out.set("page_size", Num(g.page_size));
-    out.set("entry_count", static_cast<unsigned>(g.entries.size()));
+int Tri(const val& o) { return IsNone(o) ? -1 : (o.as<bool>() ? 1 : 0); }
 
-    val entries = val::array();
-    for (size_t i = 0; i < g.entries.size(); ++i) {
-        const auto& e = g.entries[i];
-        const auto& v = g.verdicts[i];
-        val d = val::object();
-        d.set("name", SafeStr(e.name));
-        d.set("name_hex", NameHex(e.name));
-        d.set("class", std::string(ClassName(e.klass)));
-        d.set("primary_multidex", e.primary_multidex);
-        d.set("method", e.method);
-        d.set("data_offset", Num(e.data_offset));
-        d.set("compressed_size", Num(e.compressed_size));
-        d.set("uncompressed_size", Num(e.uncompressed_size));
-        d.set("crc32", e.crc32);
-        d.set("has_data_descriptor", e.has_data_descriptor);
-        d.set("method_known", v.method_known);
-        d.set("aligned_4k", v.aligned_4k);
-        d.set("aligned_16k", v.aligned_16k);
-        d.set("gate", v.gate);
-        d.set("passes", v.passes);
-        d.set("install_fatal", v.install_fatal);
-        d.set("conditional", v.conditional);
-        d.set("reason", v.reason);
-        d.set("needs", Strings(v.needs));
-        entries.set(i, d);
-    }
-    out.set("entries", entries);
+apkllm::ExtractNativeLibs Enl(const val& o) {
+    const int t = Tri(o);
+    return t < 0 ? apkllm::ExtractNativeLibs::kUnknown
+                 : (t ? apkllm::ExtractNativeLibs::kTrue : apkllm::ExtractNativeLibs::kFalse);
+}
 
-    val exc = val::array();
-    for (size_t i = 0; i < g.exceptions.size(); ++i) exc.set(i, static_cast<unsigned>(g.exceptions[i]));
-    out.set("exceptions", exc);
-    return out;
+// module.cpp Facts: apk_role "base" / anything else = split / null = unknown.
+apkllm::RoleFacts Facts(const val& apk_role, bool role_defaulted, const val& isolated,
+                        const val& feature, const val& config_for) {
+    apkllm::RoleFacts f;
+    f.role = IsNone(apk_role) ? apkllm::ApkRole::kUnknown
+             : apk_role.as<std::string>() == "base" ? apkllm::ApkRole::kBase
+                                                     : apkllm::ApkRole::kSplit;
+    f.defaulted = role_defaulted;
+    f.isolated_splits = Tri(isolated);
+    f.feature_split = Tri(feature);
+    f.config_for_split = Tri(config_for);
+    return f;
+}
+
+// A negative/fractional page size from JS would wrap to a huge uint64; clamp to 0 so the
+// engine's own "page_size must be > 0" guard reports it.
+uint64_t PageSize(double page_size) { return page_size > 0 ? static_cast<uint64_t>(page_size) : 0; }
+
+// install_gate whole from the engine (#67): the per-entry verdicts, the honest container verdict,
+// the base-AssetManager membership the split facts decide, and the checks.
+val InstallGate(const std::string& path, val extract_native_libs, val target_sdk, double page_size,
+                val apk_role, bool role_defaulted, val isolated_splits, val feature_split,
+                val config_for_split) {
+    const int tsdk = IsNone(target_sdk) ? -1 : target_sdk.as<int>();
+    apkllm::Value v = apkllm::InstallGateValue(
+        path, Enl(extract_native_libs), tsdk, PageSize(page_size),
+        Facts(apk_role, role_defaulted, isolated_splits, feature_split, config_for_split));
+    return ToVal(v);
+}
+
+// extract_map (report=false) / extract_report (report=true) whole from the engine (#67).
+val ExtractPlan(const std::string& path, val extract_native_libs, val target_sdk, double page_size,
+                val apk_role, bool role_defaulted, val isolated_splits, val feature_split,
+                val config_for_split, bool report) {
+    const int tsdk = IsNone(target_sdk) ? -1 : target_sdk.as<int>();
+    apkllm::Value v = apkllm::ExtractPlanValue(
+        path, Enl(extract_native_libs), tsdk, PageSize(page_size),
+        Facts(apk_role, role_defaulted, isolated_splits, feature_split, config_for_split), report);
+    return ToVal(v);
 }
 
 // Extract ONE entry's device-faithful bytes (the four-reader model). Bytes only.
@@ -288,7 +309,7 @@ std::vector<std::string> StringVector(const val& arr) {
     return v;
 }
 
-// Every entry's first n device-produced bytes (one archive open). Bytes only — JS labels them.
+// Every entry's first n device-produced bytes (one archive open). Bytes only — the page's hex view.
 // names=null: every entry; an array: only those exact names (libziparchive's own matcher).
 val EntryHeads(const std::string& path, double n, val names) {
     val out = val::object();
@@ -322,21 +343,16 @@ val EntryHeads(const std::string& path, double n, val names) {
     return out;
 }
 
-// Entry names under `prefix`, as libziparchive iterates them: the first `cap` + the exact total.
-val EntryNames(const std::string& path, const std::string& prefix, val suffixes, double cap) {
-    val out = val::object();
-    size_t keep = cap > 0 ? static_cast<size_t>(cap) : 0;
-    apkllm::EntryNames r = apkllm::ListEntryNames(path, prefix, StringVector(suffixes), keep);
-    out.set("ok", r.ok);
-    if (!r.ok) {
-        out.set("error", SafeStr(r.error));
-        return out;
-    }
-    val names = val::array();
-    for (size_t i = 0; i < r.names.size(); ++i) names.set(i, SafeStr(r.names[i]));
-    out.set("names", names);
-    out.set("total", Num(r.total));
-    return out;
+// content_map whole from the engine (#67): the heads, their magic labels, the summary, the checks.
+val ContentMap(const std::string& path, double head_bytes) {
+    apkllm::Value v = apkllm::ContentMapValue(path, head_bytes > 0 ? static_cast<size_t>(head_bytes) : 0);
+    return ToVal(v);
+}
+
+// tamper_report whole from the engine (#67): the raw walk, its summary and its checks.
+val TamperReport(const std::string& path) {
+    apkllm::Value v = apkllm::TamperReportValue(path);
+    return ToVal(v);
 }
 
 // The APK Signing Block's ID→value pairs, in block order (duplicates kept), as the locator walks
@@ -406,60 +422,55 @@ val SigningBlockPairs(const std::string& path, double cap, val track) {
     return out;
 }
 
-// Present-vs-consumed tamper scan (own raw ZIP walker, NOT libziparchive).
-// Pure marshalling of the native structs.
-val TamperScan(const std::string& path) {
+// container.build_traces, decided whole in the engine (#67 step 2) — module.cpp BuildTracesDict.
+val BuildTraces(const std::string& path) {
+    apkllm::BuildTraces r = apkllm::ReadBuildTraces(path);
     val out = val::object();
-    apkllm::TamperReport r = apkllm::ScanTamper(path);
     out.set("ok", r.ok);
     if (!r.ok) {
         out.set("error", SafeStr(r.error));
+        if (!r.file_sha256.empty()) out.set("file_sha256", r.file_sha256);
         return out;
     }
-    out.set("eocd_offset", Num(r.eocd_offset));
-    out.set("central_dir_offset", Num(r.cd_offset));
-    out.set("central_dir_size", Num(r.cd_size));
-    out.set("cd_records", Num(r.cd_records));
-    out.set("signing_block_present", r.signing_block_present);
-    out.set("libziparchive_would_open", r.libziparchive_would_open);
-
-    val entries = val::array();
-    size_t i = 0;
-    for (const auto& e : r.entries) {
-        val d = val::object();
-        d.set("name", SafeStr(e.name));
-        d.set("name_hex", NameHex(e.name));
-        d.set("cd_record_offset", Num(e.cd_record_offset));
-        d.set("cd_method", e.cd_method);
-        d.set("cd_gpbf", e.cd_gpbf);
-        d.set("cd_crc32", e.cd_crc32);
-        d.set("cd_compressed_size", Num(e.cd_compressed_size));
-        d.set("cd_uncompressed_size", Num(e.cd_uncompressed_size));
-        d.set("lfh_offset", Num(e.lfh_offset));
-        d.set("lfh_present", e.lfh_present);
-        d.set("lfh_method", e.lfh_method);
-        d.set("lfh_gpbf", e.lfh_gpbf);
-        d.set("lfh_crc32", e.lfh_crc32);
-        d.set("lfh_compressed_size", Num(e.lfh_compressed_size));
-        d.set("lfh_uncompressed_size", Num(e.lfh_uncompressed_size));
-        d.set("has_data_descriptor", e.has_data_descriptor);
-        entries.set(i++, d);
+    out.set("file_sha256", r.file_sha256);
+    val files = val::array();
+    for (size_t i = 0; i < r.v1_signer_files.size(); ++i) files.set(i, SafeStr(r.v1_signer_files[i]));
+    out.set("v1_signer_files", files);
+    out.set("v1_signer_files_total", Num(r.v1_signer_files_total));
+    if (r.manifest_present) {
+        const auto& mm = r.manifest_main;
+        val m = val::object();
+        m.set("created_by", mm.created_by_present ? SafeStr(mm.created_by) : val::null());
+        m.set("built_by", mm.built_by_present ? SafeStr(mm.built_by) : val::null());
+        m.set("main_section_complete", mm.main_section_complete);
+        out.set("manifest_main", m);
+    } else {
+        out.set("manifest_main", val::null());
     }
-    out.set("entries", entries);
-
-    val findings = val::array();
-    i = 0;
-    for (const auto& f : r.findings) {
-        val d = val::object();
-        d.set("id", f.id);
-        d.set("entry", SafeStr(f.entry));
-        d.set("entry_hex", NameHex(f.entry));
-        d.set("severity", f.severity);
-        d.set("detail", SafeStr(f.detail));
-        findings.set(i++, d);
+    if (r.app_metadata_present) {
+        val meta = val::object();
+        for (const auto& [k, v] : r.app_metadata) DefineKey(meta, SafeStr(k), SafeStr(v));
+        out.set("app_metadata", meta);
+    } else {
+        out.set("app_metadata", val::null());
     }
-    out.set("findings", findings);
+    val unreadable = val::object();
+    for (const auto& [k, v] : r.unreadable) DefineKey(unreadable, SafeStr(k), SafeStr(v));
+    out.set("unreadable", unreadable);
     return out;
+}
+
+// Play's frosting check in the engine (#59): ApkllmFrosting's raw output, key for key. `keys` are
+// DER SubjectPublicKeyInfos (Uint8Array each), in Play's key-list order.
+val Frosting(const std::string& path, val keys) {
+    std::vector<std::string> der;
+    const unsigned n = keys["length"].as<unsigned>();
+    for (unsigned i = 0; i < n; ++i) {
+        std::vector<uint8_t> raw = emscripten::convertJSArrayToNumberVector<uint8_t>(keys[i]);
+        der.emplace_back(raw.begin(), raw.end());
+    }
+    apkllm::Value v = apkllm::CheckFrosting(path, der);
+    return ToVal(v);
 }
 
 }  // namespace
@@ -505,6 +516,9 @@ val U16Str(const std::u16string& s) {
 
 val OptStr(const std::string& s) { return s.empty() ? val::null() : SafeStr(s); }
 
+// module.cpp: an int tri-state (1 / 0 / -1) as true / false / null
+val TriVal(int t) { return t < 0 ? val::null() : val(t == 1); }
+
 val NameObj(const apkllm::NameAsPresent& n) {
     val d = val::object();
     d.set("rfc2253", n.rendered ? U16Str(n.rfc2253) : val::null());
@@ -535,12 +549,15 @@ val CertObj(const apkllm::CertAsPresent& c) {
     d.set("sha256", c.sha256);
     d.set("trailing_bytes", Num(c.trailing_bytes));
     d.set("encoding", OptStr(c.encoding));
+    d.set("strict_lengths", TriVal(c.strict_lengths));
+    d.set("strict_lengths_at", OptStr(c.strict_lengths_at));
     d.set("tbs_read", c.tbs_read);
     d.set("error", OptStr(c.error));
     d.set("jdk_rejects", OptStr(c.jdk_rejects));
     d.set("serial", c.serial_present ? SafeStr(c.serial) : val::null());
     d.set("subject", c.tbs_read ? NameObj(c.subject) : val::null());
     d.set("issuer", c.tbs_read ? NameObj(c.issuer) : val::null());
+    d.set("unverified", c.unverified);
     return d;
 }
 
@@ -559,10 +576,7 @@ val LineageObj(const apkllm::LineageAsPresent& l) {
     for (size_t i = 0; i < l.attr_errors.size(); ++i) attr_errors.set(i, OptStr(l.attr_errors[i]));
     d.set("attr_errors", attr_errors);
     val leaf = val::array();
-    for (size_t i = 0; i < l.attr_leaf_matches.size(); ++i) {
-        int m = l.attr_leaf_matches[i];
-        leaf.set(i, m < 0 ? val::null() : val(m == 1));
-    }
+    for (size_t i = 0; i < l.attr_leaf_matches.size(); ++i) leaf.set(i, TriVal(l.attr_leaf_matches[i]));
     d.set("attr_leaf_matches", leaf);
     d.set("attrs_failed", l.attrs_failed);
     d.set("attrs_mismatched", l.attrs_mismatched);
@@ -574,13 +588,20 @@ val LineageObj(const apkllm::LineageAsPresent& l) {
         x.set("index", n.index);
         x.set("attr", n.attr);
         x.set("attr_error", OptStr(n.attr_error));
-        x.set("attr_leaf_match", n.attr_leaf_match < 0 ? val::null() : val(n.attr_leaf_match == 1));
+        x.set("attr_leaf_match", TriVal(n.attr_leaf_match));
         x.set("flags", n.flags_read ? val(n.flags) : val::null());
         x.set("signed_sig_alg", n.signed_sig_alg_read ? val(n.signed_sig_alg) : val::null());
         x.set("sig_alg", n.error.empty() ? val(n.sig_alg) : val::null());
-        x.set("signature_size", n.error.empty() ? val(Num(n.signature_size)) : val::null());
+        x.set("signature_size", n.error.empty() ? Num(static_cast<uint64_t>(n.signature_size)) : val::null());
         x.set("cert", n.cert_present ? CertObj(n.cert) : val::null());
         x.set("error", OptStr(n.error));
+        if (n.capabilities_known) {
+            val caps = val::array();
+            for (size_t k = 0; k < n.capabilities.size(); ++k) caps.set(k, n.capabilities[k]);
+            x.set("capabilities", caps);
+        } else {
+            x.set("capabilities", val::null());
+        }
         nodes.set(i, x);
     }
     d.set("nodes", nodes);
@@ -616,6 +637,7 @@ val SchemeObj(const apkllm::SchemeResult& s) {
     }
     d.set("signers", signers);
     d.set("signers_total", Num(s.certs.signers_total));
+    d.set("consumed", s.consumed);
     return d;
 }
 
@@ -627,6 +649,8 @@ val SigningCerts(const std::string& path) {
         out.set("error", SafeStr(r.error));
         return out;
     }
+    out.set("unverified", r.unverified);
+    out.set("rendering", std::string(r.rendering));
     out.set("file_sha256", r.file_sha256);
     out.set("cd_contiguous", r.cd_contiguous);
     out.set("zip64_locator_present", r.zip64_locator_present);
@@ -638,9 +662,6 @@ val SigningCerts(const std::string& path) {
     out.set("v3", SchemeObj(r.v3));
     out.set("v31", SchemeObj(r.v31));
     out.set("source_stamp", SchemeObj(r.stamp));
-    out.set("v1_ok", r.v1_ok);
-    out.set("v1_error", OptStr(r.v1_error));
-    out.set("v1_total", Num(r.v1_total));
     val v1 = val::array();
     for (size_t i = 0; i < r.v1.size(); ++i) {
         const auto& f = r.v1[i];
@@ -652,6 +673,7 @@ val SigningCerts(const std::string& path) {
         x.set("error", OptStr(f.pkcs7.error));
         x.set("certs", CertList(f.pkcs7.certs));
         x.set("certs_total", Num(f.pkcs7.certs_total));
+        x.set("indefinite_wrappers", f.pkcs7.indefinite_wrappers);
         val infos = val::array();
         for (size_t k = 0; k < f.pkcs7.signer_infos.size(); ++k) {
             const auto& v = f.pkcs7.signer_infos[k];
@@ -667,16 +689,28 @@ val SigningCerts(const std::string& path) {
         x.set("signer_infos_total", Num(f.pkcs7.signer_infos_total));
         v1.set(i, x);
     }
-    out.set("v1", v1);
+    val v1d = val::object();
+    v1d.set("ok", r.v1_ok);
+    v1d.set("error", OptStr(r.v1_error));
+    v1d.set("reader", std::string(r.v1_reader));
+    v1d.set("files", v1);
+    v1d.set("files_total", Num(r.v1_total));
+    out.set("v1", v1d);
     return out;
 }
 
+int Abi() { return kAbi; }
+
 EMSCRIPTEN_BINDINGS(apkllm_wasm) {
+    function("abi", &Abi);
     function("installGate", &InstallGate);
+    function("extractPlan", &ExtractPlan);
     function("extractEntry", &ExtractEntry);
     function("entryHeads", &EntryHeads);
-    function("entryNames", &EntryNames);
+    function("contentMap", &ContentMap);
+    function("tamperReport", &TamperReport);
     function("signingBlockPairs", &SigningBlockPairs);
+    function("buildTraces", &BuildTraces);
     function("signingCerts", &SigningCerts);
-    function("tamperScan", &TamperScan);
+    function("frosting", &Frosting);
 }
