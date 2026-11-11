@@ -30,7 +30,8 @@ cmake --build build --parallel
 node smoke.mjs                                  # real APKs from dexllm/test_apk + a non-zip
 python3 tamper_fixtures.py /tmp/fx && node smoke.mjs /tmp/fx/*.apk   # tamper findings path
 # frosting fixtures (test-key signed: verified / forged / replay / duplicate / > 1024 splits /
-# malformed / key index past the list) come from apkllm's tests/frostfix.py — crafted per session
+# malformed / key index past the list / a signature past 141 bytes / a non-DER one — #83's
+# no-keys cases) come from apkllm's tests/frostfix.py — crafted per session
 cp build/apkllm.js build/apkllm.wasm ..         # then bump window.__APKLLM_BUILD in index.html
 ```
 
