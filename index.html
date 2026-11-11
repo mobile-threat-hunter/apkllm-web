@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "787250a-1";
+window.__APKLLM_BUILD = "4d61bf7-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -1498,7 +1498,8 @@ const COPY = {
       (infos.length ? "\n\n" + tsv(["v1_file", "signer_info", "sid_kind", "issuer", "serial", "match", "cert_index"], infos) : ""); },
   "frosting": () => { const f = report.frosting; if (!f.ok) return unavailable(f, "unavailable");
     const cat = f.signature === true ? f.protobuf?.catalog : null;
-    return kvText($("#frosting-body")) + (cat ? "\n\n" + tsv(["module", "split", "sha256", "about_this_file"], frostSplits(cat).map(([m, k, x]) => [m, k, x ? splitId(x) : "", tri3(f.file_digest_match)])) : ""); },
+    return kvText($("#frosting-body")) + (cat ? "\n\n" + tsv(["module", "split", "sha256", "about_this_file"], frostSplits(cat).map(([m, k, x]) => [m, k, x ? splitId(x) : "", tri3(f.file_digest_match)])) : "") +
+      (f.recovered_keys?.length ? "\n\n" + tsv(["#", "curve", "spki_sha256", "key_list", "spki_b64_candidate"], recKeyRows(f)) : ""); },
   "traces": () => { const t = report.traces; if (!t.ok) return unavailable(t, "unavailable") + "\nfile sha256\t" + cell(t.file_sha256 ?? "");
     return kvText($("#traces-body")) + "\n\n" + tsv(["v1_signer_file"], t.v1_signer_files.map(f => [f])) +
       (t.app_metadata ? "\n\n" + tsv(["app_metadata_key", "value"], Object.entries(t.app_metadata)) : ""); },
@@ -1647,7 +1648,7 @@ const PLAY_RESULT = {
   MISSING_SIGNING_BLOCK: "no APK Signing Block", MISSING_EOCD: "no ZIP End of Central Directory", ZIP64_NOT_SUPPORTED: "Play refuses ZIP64",
   BADLY_STRUCTURED_BLOCKS: "a malformed pair — Play stops walking the block",
   SIGNATURE_DIDNT_VERIFY: "Play's signature does not verify under the built-in key", SIGNATURE_UPDATE_FAILED: "Play's signature does not verify",
-  SIGNING_KEY_INDEX_TOO_HIGH: "the entry names a key past the key list — not judged (a rotated key is not a forgery)",
+  SIGNING_KEY_INDEX_TOO_HIGH: "the entry names a key past the key list — not judged (possibly a rotated key, not necessarily a forgery)",
   NEGATIVE_SIGNING_KEY_INDEX: "a negative key index", PROD_VERIFICATION_KEY_INVALID: "the key does not parse", NO_SUPPORTED_VALIDATION_STRATEGY: "no enabled validation entry",
   DIGEST_MISMATCH: "the signature verified, but the signed file digest is not this file's", MALFORMED_FROSTING: "the signature verified, but its protobuf does not parse",
 };
@@ -1667,6 +1668,25 @@ function frostSplits(cat) {
 }
 const splitId = (x) => x.sha256 ?? (x.id_raw === null ? "" : `${x.id_raw} (${x.id_len}-byte id, not a SHA-256)`);
 const SCHEME_NAME = { v3: "v3", v31: "v3.1" };
+// #83: the P-256 keys ECDSA recovery yields from the located signature and region, each one the check
+// would accept — CANDIDATES, never trusted keys: a signature anyone writes, forged or not, can yield them.
+// key_list_index = the given key (here only the built-in one) that is the same point.
+const recKeyRows = (f) => (f.recovered_keys ?? []).map((k, i) => [String(i), k.curve, k.spki_sha256,
+  k.key_list_index === null ? "not in the key list" : `built-in key ${k.key_list_index}`, k.spki_b64]);
+function frostSigRows(f) {
+  if (!f.signed_region) return "";
+  const hex = f.signature_hex === null ? `<span class="tiny">${f.signature_len} bytes, not shown — longer than any DER ECDSA signature</span>`
+    : `<code data-sighex>${esc(f.signature_hex)}</code> <span class="tiny">${f.signature_len} bytes</span>`;
+  const rk = f.recovered_keys;
+  // a located region with no keys: the signature is past 141 bytes (the engine recovers nothing from it)
+  const keys = rk === null ? '<span class="pill na" data-nokeys="long">none</span> <span class="tiny">the signature is longer than any DER ECDSA signature</span>'
+    : !rk.length ? '<span class="pill na" data-nokeys="der">none</span> <span class="tiny">no P-256 key verifies it (not strict DER, r / s out of range, or r is no curve point\'s x)</span>'
+    : `${rk.length} candidate${rk.length === 1 ? "" : "s"}${rk.some(k => k.key_list_index !== null) ? ` · <span class="pill info" data-builtin>the built-in key signed this region</span>${f.signature === true && f.file_digest_match === true ? "" : ' <span class="tiny">it verifies the signed region only — whether that region is about this file is ' + (f.file_digest_match === false ? "refuted (another file's)" : "not judged") + "</span>"}` : ' · <span class="tiny">none is the built-in key</span>'}`
+      + ' <span class="pill warn" data-candidates>candidates, not trusted keys</span> <span class="tiny">' + (rk.some(k => k.key_list_index === null) ? "a key not in the list proves nothing: a signature anyone writes yields keys that verify it" : "only a listed key means anything") + "</span>";
+  const rotated = f.play_result === "SIGNING_KEY_INDEX_TOO_HIGH" ? `<dt>key index</dt><dd><span class="pill warn" data-rotated>beyond the key list</span> <span class="tiny">not judged — this may be a rotated Play key rather than a forgery, and anyone can write such an index${rk?.length ? "; the candidates below verify this signature whoever made it" : ""}</span></dd>` : "";
+  return `${rotated}<dt>signed region</dt><dd>offset ${f.signed_region.offset} · ${f.signed_region.size} bytes <span class="tiny">the file range Play's ECDSA covers</span></dd>
+    <dt>signature bytes</dt><dd>${hex}</dd><dt>recovered keys</dt><dd>${keys}</dd>`;
+}
 function renderFrosting() {
   const f = report.frosting, el = $("#frosting-body");
   if (!f.ok) { el.innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${vis(f.error)}</span>`; return; }
@@ -1693,8 +1713,11 @@ function renderFrosting() {
     ${pb ? `<dt>frosting message</dt><dd>expires ${pb.expires_at_ms === null ? "—" : fmtMs(pb.expires_at_ms)} · sharing status ${pb.sharing_status ?? "—"}${pb.fields_unknown_total ? ` · ${pb.fields_unknown_total} unmodelled field(s)` : ""}</dd>
     <dt>split catalog</dt><dd>${cat ? `${pb.catalog_size} split${pb.catalog_size === 1 ? "" : "s"}${pb.catalog_cut ? ` (${pb.catalog_size - pb.catalog_cut} listed)` : ""} <span class="tiny">${mine ? "whole-file SHA-256 of each split APK Play delivers with this base" : f.file_digest_match === false ? "Google-signed, but about ANOTHER file — not this APK's splits" : "Google-signed, but whether it is about this file is not judged — " + (DIGEST_REASON[f.digest_reason] ?? "")}</span>` : `<span class="pill na">none</span> <span class="tiny">${esc(pb.catalog_reason ?? "")}</span>`}</dd>` : ""}
     ${f.protobuf_reason && f.protobuf_reason !== "unverified" ? `<dt>protobuf</dt><dd><span class="pill warn">${vis(f.protobuf_reason)}</span></dd>` : ""}
+    ${frostSigRows(f)}
   </dl>` + (rows.length ? `<div class="tablewrap scrollbox" style="margin-top:10px" tabindex="0" role="region" aria-label="Frosting split catalog"><table><thead><tr><th>module</th><th>split</th><th>sha256</th></tr></thead><tbody>` +
     rows.map(([m, k, x]) => `<tr${mine ? "" : ' class="cond"'}><td>${esc(m)}</td><td>${esc(k)}</td><td>${x ? `<code data-split>${esc(splitId(x))}</code>` : ""}</td></tr>`).join("") + "</tbody></table></div>" : "") +
+    (f.recovered_keys?.length ? `<div class="tablewrap" style="margin-top:10px"><table data-recovered><thead><tr><th>#</th><th>curve</th><th>spki sha256</th><th>key list</th><th>spki (base64 DER, candidate)</th></tr></thead><tbody>` +
+      recKeyRows(f).map(r => `<tr class="cond">${r.map((c, j) => `<td>${j >= 2 && j !== 3 ? `<code class="tiny" style="word-break:break-all">${esc(c)}</code>` : esc(c)}</td>`).join("")}</tr>`).join("") + "</tbody></table></div>" : "") +
     `<p class="note">Not AOSP: Play's frosting is read by the Play Store only; apkllm runs Play's observed check, its key and ECDSA judged by AOSP BoringSSL as Conscrypt calls them, under the built-in key recovered from Play signatures. Each split is named by the SHA-256 of its whole file (compare with the Build traces sha256 of the split).</p>`;
 }
 

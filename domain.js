@@ -16,7 +16,7 @@
 
 // module.cpp's ABI this page is written against (12 = frosting, apkllm #59): the worker refuses
 // an apkllm.wasm with another, so a stale cached engine never feeds this page a different shape.
-const ENGINE_ABI = 12;
+const ENGINE_ABI = 13;
 const HEAD_BYTES = 512;   // magic.HEAD_BYTES: content_map's head per entry
 
 // ── container.signing_block ───────────────────────────────────────────────
@@ -115,6 +115,9 @@ function frostingView(raw, sb, tr, keysSource = "builtin") {
     present: raw.present, signature,
     digest_claim_matches: claim, file_digest_match: signature === true ? claim : null, digest_reason: null,
     key_index: raw.key_index, key_spki_sha256: raw.key_spki_sha256, entry_index: raw.entry_index,
+    // #83: where the selected signature is and the P-256 keys recovered from it — candidates, never trusted keys
+    signed_region: raw.signed_region, signature_len: raw.signature_len, signature_hex: raw.signature_hex,
+    recovered_keys: raw.recovered_keys,
     covered: null, uncovered_pairs: null, uncovered_pairs_cut: 0, uncovered_signer_schemes: null,
     duplicate_frosting_pairs: Math.max(0, (raw.frosting_pairs || 0) - 1),
     duplicate_v2_pairs: Math.max(0, (raw.v2_pairs || 0) - 1),

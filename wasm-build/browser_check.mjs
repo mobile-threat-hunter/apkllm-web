@@ -536,9 +536,17 @@ try {
   const fz = JSON.parse(await evalJs(`(() => { const f = report.frosting, body = document.querySelector("#frosting-body");
     const cat = f.ok && f.signature === true ? f.protobuf?.catalog : null;
     return JSON.stringify({ ok: f.ok, result: f.play_result ?? null, sig: f.signature ?? null, digest: f.file_digest_match ?? null,
-      role: body.querySelector("[data-role]")?.dataset.role ?? null, rows: body.querySelectorAll("tbody tr").length,
+      role: body.querySelector("[data-role]")?.dataset.role ?? null, rows: body.querySelectorAll('[aria-label="Frosting split catalog"] tbody tr').length,
       rowsWant: cat ? frostSplits(cat).length : 0, hashes: body.querySelectorAll("[data-split]").length, copy: COPY.frosting(),
       binds: [...body.querySelectorAll("dt")].some(dt => dt.textContent === "binds"), claim: frostClaim(f),
+      keyRows: body.querySelectorAll("[data-recovered] tbody tr").length, keysWant: f.ok ? (f.recovered_keys?.length ?? 0) : 0,
+      candidates: body.querySelectorAll("[data-candidates]").length, region: f.ok && !!f.signed_region,
+      sigHex: body.querySelector("[data-sighex]")?.textContent ?? null, sigHexWant: f.ok ? f.signature_hex ?? null : null,
+      nokeys: body.querySelector("[data-nokeys]")?.dataset.nokeys ?? null,
+      nokeysWant: !f.ok || !f.signed_region ? null : f.recovered_keys === null ? "long" : f.recovered_keys.length ? null : "der",
+      builtin: body.querySelectorAll("[data-builtin]").length, builtinWant: f.ok && (f.recovered_keys ?? []).some(k => k.key_list_index !== null) ? 1 : 0,
+      sigBytes: !!body.querySelector("[data-sighex]") || /not shown/.test(body.textContent),
+      rotated: body.querySelectorAll("[data-rotated]").length, keyCopy: f.ok && (f.recovered_keys ?? []).every(k => COPY.frosting().includes(k.spki_b64)),
       unbound: body.querySelectorAll("[data-unbound]").length, unboundWant: f.ok && f.uncovered_signer_schemes?.length ? 1 : 0,
       raw: new RegExp(INVIS_RE.source).test(body.textContent.replace(/[\\t\\n\\r]/g, "")) || new RegExp(INVIS_RE.source).test(COPY.frosting().replace(/[\\t\\n\\r]/g, "")) }); })()`));
   console.log("frosting:", JSON.stringify({ ...fz, copy: fz.copy.length }));
@@ -550,6 +558,16 @@ try {
   if (fz.unbound !== (fz.claim ? fz.unboundWant : 0)) fail("a v3 / v3.1 signer the frosting does not bind is not flagged");
   if (fz.binds !== fz.claim) fail("the frosting 'binds' row shown without a verified frosting about this file (or missing with one)");
   if (fz.raw) fail("an invisible character reached the frosting card or its copy");
+  // #83: the located signature and its recovered keys — every key listed, always labelled a candidate
+  if (fz.keyRows !== fz.keysWant) fail(`recovered keys ${fz.keyRows} rows ≠ ${fz.keysWant}`);
+  if (fz.keysWant && fz.candidates !== 1) fail("recovered keys shown without the 'candidates, not trusted keys' label");
+  if (fz.sigHex !== (fz.region ? fz.sigHexWant : null)) fail("signature hex shown ≠ the engine's");
+  if (fz.rotated !== (fz.result === "SIGNING_KEY_INDEX_TOO_HIGH" && fz.region ? 1 : 0)) fail("key index beyond the list not explained (or explained elsewhere)");
+  if (fz.ok && !fz.keyCopy) fail("frosting copy is missing a recovered key");
+  if (fz.nokeys !== fz.nokeysWant) fail(`recovered keys 'none' state ${fz.nokeys} ≠ ${fz.nokeysWant}`);
+  if (fz.builtin !== fz.builtinWant) fail("built-in key match shown ≠ the engine's key_list_index");
+  if (fz.sig === true && fz.region && !fz.builtinWant) fail("a verified frosting whose recovered keys do not include the built-in key");
+  if (fz.region && !fz.sigBytes) fail("located signature neither shown nor marked too long");
   if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
     for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);

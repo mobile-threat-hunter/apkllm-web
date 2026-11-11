@@ -5,7 +5,7 @@ apkllm(APK 컨테이너/압축 해제 분석 라이브러리)의 기능을 브�
 - 소스 라이브러리: `/home/nyahumi/Project/apkllm`
 - 참조 구현: `/home/nyahumi/Project/dexllm-web` — dexllm을 WASM으로 빌드해 정적 페이지(index.html + dexllm.js/dexllm.wasm)로 띄운 구조를 그대로 따를 것
 - dexllm-web 교훈: WASM은 **단일 스레드로 빌드**해야 함 (멀티스레드 빌드 시 파일 로드 실패)
-- 데모 범위(확정): **컨테이너 레이어 + 구조적 서명 읽기 + frosting** — apkllm #67 이후 모든 리포트를 C++ 엔진이 결정(install_gate / extract_plan / tamper_report / content_map / build_traces / signing_certs, 엔진 `Value`를 `wasm_module.cpp`가 1:1 변환) + signing_block_pairs(pair 이름은 Python 몫 → domain.js signingBlock) + frosting(#59, 엔진 + BoringSSL `crypto`, 내장 키). domain.js에 엔진 판정 재유도 금지. APK 서명 검증(Java apksig)·frosting()의 Python 후처리·play_origin/play_set·언랩(Python)은 범위 밖.
+- 데모 범위(확정): **컨테이너 레이어 + 구조적 서명 읽기 + frosting** — apkllm #67 이후 모든 리포트를 C++ 엔진이 결정(install_gate / extract_plan / tamper_report / content_map / build_traces / signing_certs, 엔진 `Value`를 `wasm_module.cpp`가 1:1 변환) + signing_block_pairs(pair 이름은 Python 몫 → domain.js signingBlock) + frosting(#59, 엔진 + BoringSSL `crypto`, 내장 키; #83 서명 영역·서명·복원 키 후보는 엔진 값 그대로, 신뢰 키로 쓰지 않음). domain.js에 엔진 판정 재유도 금지. APK 서명 검증(Java apksig)·frosting()의 Python 후처리·play_origin/play_set·언랩(Python)은 범위 밖.
 - 툴체인: emsdk **6.0.0** (엔진 magic.cpp의 부동소수점 `std::from_chars` = libc++ ≥ 20 필요; 4.0.9의 libc++ 19로는 빌드 불가).
 
 ## 검증 게이트 (`.claude/` — apkllm/dexllm에서 선별 상속)
