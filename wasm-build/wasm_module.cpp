@@ -11,7 +11,7 @@
 // every function takes its path, exactly like the Python binding.
 //
 // JS API (module-level functions, all return plain JS objects):
-//   abi()                                   // module.cpp's ABI (13) — the worker refuses another
+//   abi()                                   // module.cpp's ABI (14) — the worker refuses another
 //   installGate(path, extractNativeLibs: boolean|null, targetSdk: number|null, pageSize: number,
 //               apkRole: "base"|"split"|null, roleDefaulted: boolean,
 //               isolatedSplits: boolean|null, featureSplit: boolean|null, configForSplit: boolean|null)
@@ -76,8 +76,9 @@ using emscripten::val;
 namespace {
 
 // module.cpp's ABI: the marshalled shape's version (12 = frosting, apkllm #59; 13 = its signed
-// region, signature and recovered keys, #83).
-constexpr int kAbi = 13;
+// region, signature and recovered keys, #83; 14 = Play Store 54.0.09's check, #87 — same keys,
+// MALFORMED_FROSTING no longer signed).
+constexpr int kAbi = 14;
 
 // liblog's host logger (__android_log_stderr_logger → filestream_logger → GetThreadId)
 // has no branch for a platform that is none of __BIONIC__/__APPLE__/__linux__/_WIN32,

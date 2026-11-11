@@ -546,6 +546,8 @@ try {
       nokeysWant: !f.ok || !f.signed_region ? null : f.recovered_keys === null ? "long" : f.recovered_keys.length ? null : "der",
       builtin: body.querySelectorAll("[data-builtin]").length, builtinWant: f.ok && (f.recovered_keys ?? []).some(k => k.key_list_index !== null) ? 1 : 0,
       sigBytes: !!body.querySelector("[data-sighex]") || /not shown/.test(body.textContent),
+      okPills: body.querySelectorAll(".pill.ok").length, gloss: body.querySelector("dd code + .tiny")?.textContent ?? null,
+      verifiedPill: [...document.querySelectorAll(".filebar .pill, #filebar .pill")].some(p => /Play frosting verified/.test(p.textContent)),
       rotated: body.querySelectorAll("[data-rotated]").length, keyCopy: f.ok && (f.recovered_keys ?? []).every(k => COPY.frosting().includes(k.spki_b64)),
       unbound: body.querySelectorAll("[data-unbound]").length, unboundWant: f.ok && f.uncovered_signer_schemes?.length ? 1 : 0,
       raw: new RegExp(INVIS_RE.source).test(body.textContent.replace(/[\\t\\n\\r]/g, "")) || new RegExp(INVIS_RE.source).test(COPY.frosting().replace(/[\\t\\n\\r]/g, "")) }); })()`));
@@ -564,6 +566,12 @@ try {
   if (fz.sigHex !== (fz.region ? fz.sigHexWant : null)) fail("signature hex shown ≠ the engine's");
   if (fz.rotated !== (fz.result === "SIGNING_KEY_INDEX_TOO_HIGH" && fz.region ? 1 : 0)) fail("key index beyond the list not explained (or explained elsewhere)");
   if (fz.ok && !fz.keyCopy) fail("frosting copy is missing a recovered key");
+  // apkllm #87: Play Store 54.0.09 parses the protobuf before the signature — MALFORMED_FROSTING is never signed
+  if (fz.result === "MALFORMED_FROSTING" && fz.sig === true) fail("MALFORMED_FROSTING shown with a verified signature");
+  // the rendered card: only a verified signature may show an ok pill or the filebar's "verified" pill
+  if (fz.ok && fz.sig !== true && fz.okPills) fail("an ok pill in the frosting card without a verified signature");
+  if (fz.ok && !fz.claim && fz.verifiedPill) fail("filebar says Play frosting verified without a claim");
+  if (fz.ok && fz.result !== null && !fz.gloss) fail(`Play result ${fz.result} has no description`);
   if (fz.nokeys !== fz.nokeysWant) fail(`recovered keys 'none' state ${fz.nokeys} ≠ ${fz.nokeysWant}`);
   if (fz.builtin !== fz.builtinWant) fail("built-in key match shown ≠ the engine's key_list_index");
   if (fz.sig === true && fz.region && !fz.builtinWant) fail("a verified frosting whose recovered keys do not include the built-in key");
