@@ -14,9 +14,10 @@
 (function (root) {
 "use strict";
 
-// module.cpp's ABI this page is written against (12 = frosting, apkllm #59): the worker refuses
+// module.cpp's ABI this page is written against (14 = Play Store 54.0.09's frosting check, apkllm #87):
+// the worker refuses
 // an apkllm.wasm with another, so a stale cached engine never feeds this page a different shape.
-const ENGINE_ABI = 13;
+const ENGINE_ABI = 14;
 const HEAD_BYTES = 512;   // magic.HEAD_BYTES: content_map's head per entry
 
 // ── container.signing_block ───────────────────────────────────────────────
@@ -82,10 +83,11 @@ const frostingKeys = () => FROSTING_KEYS_DEFAULT.map(k => Uint8Array.from(atob(k
 // not bind (every pair but the first v2 one — a v3 / v3.1 signer above all); the protobuf only under
 // a verified signature that parsed. `sb` = signingBlock(...) and `tr` = the engine's tamper_report of
 // the same bytes (Python reads both again; MEMFS has no other writer, so no file_changed here).
-const FROSTING_SIGNED = new Set(["SUCCESS", "DIGEST_MISMATCH", "MALFORMED_FROSTING"]);
+// MALFORMED_FROSTING is not signed (apkllm #87): Play Store 54.0.09 parses the protobuf before the signature
+const FROSTING_SIGNED = new Set(["SUCCESS", "DIGEST_MISMATCH"]);
 const FROSTING_FORGED = new Set(["SIGNATURE_DIDNT_VERIFY", "SIGNATURE_UPDATE_FAILED"]);
 const FROSTING_VIEW_FINDINGS = ["eocd_selection_divergence", "second_eocd", "janus", "prepended_data"];
-const protoSigned = (result) => FROSTING_SIGNED.has(result) && result !== "MALFORMED_FROSTING";
+const protoSigned = (result) => FROSTING_SIGNED.has(result);
 function frostingContainerView(raw, sb, tr) {
   if (!(sb.ok && tr.ok)) return ["container_unreadable", null, 0, null];
   const uncovered = [];

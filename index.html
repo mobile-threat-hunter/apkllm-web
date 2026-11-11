@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "4d61bf7-1";
+window.__APKLLM_BUILD = "a457343-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -1634,23 +1634,23 @@ const DIGEST_REASON = {
 function frostRole(f) {
   if (!f.ok) return ["na", "unknown", "the check could not run"];
   if (f.present === false) return ["na", "unknown", "no frosting pair — a split, or an APK Google Play did not deliver (one file cannot tell which)"];
-  if (f.present !== true) return ["na", "unknown", "Play's walk stopped before it reached the pairs — not read"];
+  if (f.present !== true) return ["na", "unknown", "Play refused the container or the Signing Block (no EOCD, ZIP64, a CD not ending at the EOCD, a pair it cannot walk) — it treats the file as not frosted, even if a frosting pair is listed"];
   if (f.signature === false) return ["warn", "unknown", "a frosting pair is present but Play's signature does not verify — anyone can write one"];
   if (f.signature !== true) return ["na", "unknown", f.play_result === null ? "Play's check would throw before judging the signature" : "Play's signature is not judged (" + esc(f.play_result) + ")"];
   if (f.file_digest_match === false) return ["warn", "not this file's", "a genuine frosting replayed onto other bytes — its catalog describes another file"];
   if (f.file_digest_match !== true) return ["warn", "unknown", "Play's signature verified, but " + (DIGEST_REASON[f.digest_reason] ?? "the digest is not judged")];
-  if (!f.protobuf) return ["warn", "unknown", "Play's signature verified, but its message does not parse (" + vis(f.protobuf_reason ?? "") + ")"];
+  if (!f.protobuf) return ["warn", "unknown", "Play's signature verified, but the engine returned no message (" + vis(f.protobuf_reason ?? "") + ")"];   // a guard: 54.0.09 parses before the signature
   if (!f.protobuf.catalog) return ["info", "verified, no catalog", `Play's frosting, but no split catalog (${esc(f.protobuf.catalog_reason ?? "absent")})`];
   return ["info", "base", "a verified frosting with a split catalog — the file play_set takes as the base of its set (a hint: play_set decides over all the set's files)"];
 }
 const PLAY_RESULT = {
-  SUCCESS: "Play's checks passed", NO_FROSTING_BLOCK: "no frosting pair in the APK Signing Block",
-  MISSING_SIGNING_BLOCK: "no APK Signing Block", MISSING_EOCD: "no ZIP End of Central Directory", ZIP64_NOT_SUPPORTED: "Play refuses ZIP64",
-  BADLY_STRUCTURED_BLOCKS: "a malformed pair — Play stops walking the block",
+  // Play Store 54.0.09 (apkllm #87): every container failure is NO_FROSTING_BLOCK
+  SUCCESS: "Play's checks passed", NO_FROSTING_BLOCK: "no frosting pair — or Play refused the container (no EOCD, ZIP64, a CD that does not end where the EOCD starts, no or a malformed Signing Block)",
+  FROSTING_BLOCK_TOO_SHORT: "the frosting value is under 4 bytes",
   SIGNATURE_DIDNT_VERIFY: "Play's signature does not verify under the built-in key", SIGNATURE_UPDATE_FAILED: "Play's signature does not verify",
   SIGNING_KEY_INDEX_TOO_HIGH: "the entry names a key past the key list — not judged (possibly a rotated key, not necessarily a forgery)",
   NEGATIVE_SIGNING_KEY_INDEX: "a negative key index", PROD_VERIFICATION_KEY_INVALID: "the key does not parse", NO_SUPPORTED_VALIDATION_STRATEGY: "no enabled validation entry",
-  DIGEST_MISMATCH: "the signature verified, but the signed file digest is not this file's", MALFORMED_FROSTING: "the signature verified, but its protobuf does not parse",
+  DIGEST_MISMATCH: "the signature verified, but the signed file digest is not this file's", MALFORMED_FROSTING: "its protobuf does not parse — Play reads it before the signature, which is not judged",
 };
 // every split the catalog names: the base module's split + configs, then each feature module's
 function frostSplits(cat) {
@@ -1692,7 +1692,7 @@ function renderFrosting() {
   if (!f.ok) { el.innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${vis(f.error)}</span>`; return; }
   const [cls, role, why] = frostRole(f);
   const res = f.play_result === null ? `<span class="pill bad">uncaught</span> <span class="tiny">Play would throw ${vis(f.uncaught ?? "")}</span>`
-    : `<code>${esc(f.play_result)}</code> <span class="tiny">${PLAY_RESULT[f.play_result] ?? ""}</span>`;
+    : `<code>${esc(f.play_result)}</code> <span class="tiny">${PLAY_RESULT[f.play_result] ?? "Play's framing check refuses the frosting value"}</span>`;
   const sig = f.signature === true ? `<span class="pill ok">verified</span> <span class="tiny">built-in key, SPKI SHA-256 ${esc((f.key_spki_sha256 ?? "").slice(0, 16))}…</span>`
     : f.signature === false ? '<span class="pill bad">does not verify</span>' : '<span class="pill na">not judged</span>';
   const dig = f.file_digest_match === true ? '<span class="pill ok">this file</span> <span class="tiny">Play\'s digest matches this file outside the Signing Block' + (f.covered?.v2 ? " and its first v2 pair" : "") + "</span>"

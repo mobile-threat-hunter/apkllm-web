@@ -31,7 +31,8 @@ node smoke.mjs                                  # real APKs from dexllm/test_apk
 python3 tamper_fixtures.py /tmp/fx && node smoke.mjs /tmp/fx/*.apk   # tamper findings path
 # frosting fixtures (test-key signed: verified / forged / replay / duplicate / > 1024 splits /
 # malformed / key index past the list / a signature past 141 bytes / a non-DER one — #83's
-# no-keys cases) come from apkllm's tests/frostfix.py — crafted per session
+# no-keys cases; apkllm #87's container gap / value under 4 bytes / malformed protobuf with a forged
+# signature) come from apkllm's tests/frostfix.py — crafted per session
 cp build/apkllm.js build/apkllm.wasm ..         # then bump window.__APKLLM_BUILD in index.html
 ```
 
