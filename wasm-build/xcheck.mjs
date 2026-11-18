@@ -117,6 +117,14 @@ for (const [path, n0] of Object.entries(native)) {
     if (o.v1_signer_files_total > 64) o.v1_signer_files = o.v1_signer_files.length;
     return o;
   };
+  // the LFH chain (#98) — exact, key order included; every row's bytes through lfhChainEntry
+  diff("lfh_chain", m.lfhChain(VFS), n.lfh_chain);
+  for (const [name, ne] of Object.entries(n.lfh_entries ?? {})) {
+    const key = name.startsWith("x:") ? Uint8Array.from(name.slice(2).match(/../g) || [], h => parseInt(h, 16)) : name.slice(2);
+    const r = m.lfhChainEntry(VFS, key, 512 * 1024 * 1024);
+    diff(`lfh_entries[${name}]`, r.ok ? { ok: true, size: r.data.length, sha256: createHash("sha256").update(r.data).digest("hex") } : { ok: false, error: r.error }, ne);
+  }
+  if (n.lfh_chain?.applies) console.log(`  LFH chain: ${n.lfh_chain.entries_total} rows, ${Object.keys(n.lfh_entries).length} entries read & compared`);
   const bt = m.buildTraces(VFS), nb = n.build_traces;
   diff("build_traces", normBT(bt), normBT(nb));
   if (bt.app_metadata) diff("build_traces.app_metadata.order", Object.keys(bt.app_metadata).filter(k => !/^(0|[1-9]\d*)$/.test(k)), Object.keys(nb.app_metadata).filter(k => !/^(0|[1-9]\d*)$/.test(k)));

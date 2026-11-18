@@ -11,7 +11,7 @@
 // every function takes its path, exactly like the Python binding.
 //
 // JS API (module-level functions, all return plain JS objects):
-//   abi()                                   // module.cpp's ABI (14) — the worker refuses another
+//   abi()                                   // module.cpp's ABI (17) — the worker refuses another
 //   installGate(path, extractNativeLibs: boolean|null, targetSdk: number|null, pageSize: number,
 //               apkRole: "base"|"split"|null, roleDefaulted: boolean,
 //               isolatedSplits: boolean|null, featureSplit: boolean|null, configForSplit: boolean|null)
@@ -26,6 +26,8 @@
 //   buildTraces(path)
 //   signingCerts(path)                      // #58: signer certificates as present, unverified
 //   frosting(path, keys: Uint8Array[])      // #59: Play's frosting check, keys = DER SPKIs
+//   lfhChain(path)                          // #98: the LFH chain of a file libziparchive refuses
+//   lfhChainEntry(path, name, maxBytes)     // one deliverable chain entry's bytes (.data)
 // (embind checks the argument count: every argument is passed, null for Python's None default.)
 //
 // Differences forced by the JS side, none of them policy:
@@ -61,9 +63,11 @@
 
 #include "apksig.h"
 #include "certs.h"
+#include "checks.h"
 #include "container.h"
 #include "content_map.h"
 #include "frosting.h"
+#include "lfh_chain.h"
 #include "plan.h"
 #include "tamper_report.h"
 #include "traces.h"
@@ -77,8 +81,10 @@ namespace {
 
 // module.cpp's ABI: the marshalled shape's version (12 = frosting, apkllm #59; 13 = its signed
 // region, signature and recovered keys, #83; 14 = Play Store 54.0.09's check, #87 — same keys,
-// MALFORMED_FROSTING no longer signed).
-constexpr int kAbi = 14;
+// MALFORMED_FROSTING no longer signed; 15 = salvage, #98; 16 = libziparchive's refusal as
+// `open_error` beside `error` and twice-listed rows undeliverable, #100; 17 = salvage renamed
+// lfh_chain / lfh_chain_entry, `not_device_view: true`, checks `lfh_chain.*`).
+constexpr int kAbi = 17;
 
 // liblog's host logger (__android_log_stderr_logger → filestream_logger → GetThreadId)
 // has no branch for a platform that is none of __BIONIC__/__APPLE__/__linux__/_WIN32,
@@ -432,6 +438,10 @@ val BuildTraces(const std::string& path) {
     if (!r.ok) {
         out.set("error", SafeStr(r.error));
         if (!r.file_sha256.empty()) out.set("file_sha256", r.file_sha256);
+        if (r.open_rc != 0) {  // #100: libziparchive's own refusal (module.cpp AddOpenError)
+            apkllm::Value e = apkllm::OpenError(r.open_rc);
+            out.set("open_error", ToVal(e));
+        }
         return out;
     }
     out.set("file_sha256", r.file_sha256);
@@ -701,6 +711,39 @@ val SigningCerts(const std::string& path) {
     return out;
 }
 
+// lfh_chain (#98, D25): the Local File Header chain of a file libziparchive cannot open — the
+// engine's Value whole (module.cpp LfhChain). Not a device view: `not_device_view` is set by it.
+val LfhChain(const std::string& path) {
+    apkllm::Value v = apkllm::LfhChainValue(path);
+    return ToVal(v);
+}
+
+// ONE LFH-chain entry's bytes by its exact raw name (module.cpp LfhChainEntryDict): a JS string
+// (UTF-8) or a Uint8Array of the raw name, as extractEntry takes it.
+val LfhChainEntry(const std::string& path, val name, double max_bytes) {
+    val out = val::object();
+    std::string key;
+    if (name.typeOf().as<std::string>() == "string") {
+        key = name.as<std::string>();
+    } else if (name.instanceof(val::global("Uint8Array"))) {
+        std::vector<uint8_t> raw = emscripten::convertJSArrayToNumberVector<uint8_t>(name);
+        key.assign(raw.begin(), raw.end());
+    } else {
+        out.set("ok", false);
+        out.set("error", std::string("lfhChainEntry: name must be a string or a Uint8Array"));
+        return out;
+    }
+    apkllm::LfhChainBytes e =
+        apkllm::LfhChainEntry(path, key, max_bytes > 0 ? static_cast<uint64_t>(max_bytes) : 0);
+    out.set("ok", e.ok);
+    if (!e.ok) {
+        out.set("error", SafeStr(e.error));
+        return out;
+    }
+    out.set("data", Bytes(e.data));
+    return out;
+}
+
 int Abi() { return kAbi; }
 
 EMSCRIPTEN_BINDINGS(apkllm_wasm) {
@@ -715,4 +758,6 @@ EMSCRIPTEN_BINDINGS(apkllm_wasm) {
     function("buildTraces", &BuildTraces);
     function("signingCerts", &SigningCerts);
     function("frosting", &Frosting);
+    function("lfhChain", &LfhChain);
+    function("lfhChainEntry", &LfhChainEntry);
 }

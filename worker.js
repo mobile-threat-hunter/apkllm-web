@@ -9,8 +9,9 @@
 // Protocol (postMessage; each call carries an opaque `id` the worker echoes):
 //   main → worker: { id, type: "init",    buildSha: string }
 //                  { id, type: "load",    bytes: Uint8Array }
-//                      → { tamper, signing, traces, certs, frosting, content, input: {md5, sha256, size} }
-//                        (the manifest-independent reads)
+//                      → { tamper, signing, traces, certs, frosting, content, lfh, input: {md5, sha256, size} }
+//                        (the manifest-independent reads; lfh = the LFH chain (apkllm #98) only when
+//                        libziparchive itself refused the file — `open_error` — else null)
 //                  { id, type: "gate",    extractNativeLibs: bool|null, targetSdk: number|null, pageSize: number,
 //                                         apkRole: "base"|"split"|null, roleDefaulted: bool,
 //                                         isolatedSplits / featureSplit / configForSplit: bool|null }
@@ -24,6 +25,9 @@
 //                  { id, type: "single",  index: number, source: {name,size}, params: <gate params> }
 //                      → { ok, blob, base, md5, entry, same } | { ok: false, entry }  — one entry,
 //                        named as the bundle would ({md5} or {md5}.{sha256}; base = the zip's name)
+//                  { id, type: "lfhSingle", index: number (into lfh.entries), source: {name,size} }
+//                      → { ok, blob, base, md5, entry, same } | { ok: false, entry }  — one LFH-chain
+//                        entry (lfhChainEntry: CRC-32 matched), named as `single` names one
 //   worker → main: { id, ok: true,  result }
 //                  { id, ok: false, error: string }
 //                  { id, progress: { done, total } }   (bundle only; any number, before the result)
@@ -88,7 +92,9 @@ function writeInput(bytes) {
 // The manifest-independent reads, once per load. Each entry's head is bounded (the engine stops
 // its reader after HEAD_BYTES), so content_map and the hex view cost one head per entry each.
 let INPUT = null;   // { md5, sha256, size } of the loaded APK — names its {md5}.json report
+let LFH = null;     // the load's LFH chain (null unless libziparchive refused the file)
 async function load(bytes) {
+  LFH = null;   // never the previous file's chain, whatever this load throws
   INPUT = { md5: md5hex(bytes), sha256: await sha256hex(bytes), size: bytes.length };
   writeInput(bytes);
   const D = self.ApkllmDomain;
@@ -108,7 +114,10 @@ async function load(bytes) {
         ? { name: h.name, disposition: h.disposition, complete: h.complete, head: h.head } : null;
     });
   }
-  return { tamper, signing, traces, certs, frosting, content, input: INPUT };
+  // apkllm #98 / #100: when libziparchive itself refuses the file (`open_error`, never the message
+  // text), the Local File Header chain is what a sequential reader finds — the engine's walk whole
+  LFH = content.open_error || traces.open_error ? Module.lfhChain(VFS) : null;
+  return { tamper, signing, traces, certs, frosting, content, lfh: LFH, input: INPUT };
 }
 
 function gate(p) {
@@ -438,6 +447,61 @@ self.onmessage = (e) => {
   queue = queue.then(() => handle(e, cancelAt));
 };
 
+// ── one LFH-chain entry → a zip, named as `single` names a device-read entry ─────────────────
+const LFH_RULE = "apkllm lfh_chain (#98, D25) — NOT the device's view: the device's reader refuses this file, so " +
+  "each entry's bytes come from the Local File Header chain read in sequence from offset 0 (never a signature scan), " +
+  "method 0 copied / 8 inflated, delivered only when the entry's own CRC-32 matches; the chain is the headers' own " +
+  "account and never proves that nothing is hidden";
+async function lfhRow(rows, i) {
+  const e = rows[i];
+  const row = { index: i, name: e.name, name_hex: e.name_hex ?? null, offset: e.offset, method: e.method, crc32: e.crc32 };
+  if (!e.deliverable) { row.ok = false; row.error = e.why; return { row }; }
+  const r = Module.lfhChainEntry(VFS, nameKey(e.name, e.name_hex), MAX_ENTRY);
+  if (!r.ok) { row.ok = false; row.error = r.error; return { row }; }
+  row.ok = true; row.size = r.data.length;
+  if (e.name.endsWith("/") && r.data.length === 0) { row.kind = "directory"; row.file = null; return { row }; }
+  row.kind = "file"; row.md5 = md5hex(r.data); row.sha256 = await sha256hex(r.data);
+  return { row, data: r.data };
+}
+// Each lfhChainEntry call walks the WHOLE file again (one private copy, every deflate row inflated
+// to check its CRC), so the md5-sibling check is bounded by walks, not bytes: an empty entry has no
+// sibling of other content (every empty file is one content), and past LFH_SIBLING_WALKS same-size
+// rows the collision-proof {md5}.{sha256} name is used without reading them.
+const LFH_SIBLING_WALKS = 16;
+async function lfhSingle(msg, cancelAt) {
+  if (!loaded || !LFH?.applies) throw new Error("no LFH chain for this file");
+  const rows = LFH.entries, i = msg.index;
+  if (!Number.isInteger(i) || i < 0 || i >= rows.length) throw new Error("no such entry");
+  const { row, data } = await lfhRow(rows, i);
+  if (!row.ok || row.kind === "directory") return { ok: false, entry: row };
+  // the same md5-sibling rule as `single`: of different contents sharing an md5, the first in
+  // chain order is {md5}.bin, later ones {md5}.{sha256}.bin
+  const size = rows[i].uncompressed_size;
+  const sibs = row.size === 0 ? [] : rows.map((_, k) => k).filter(k => k !== i && rows[k].deliverable && rows[k].uncompressed_size === size);
+  const same = [row], firstOf = new Map([[row.sha256, i]]);
+  const checked = sibs.length <= LFH_SIBLING_WALKS && sibs.length * size <= SIBLING_BYTES;
+  if (checked) for (const k of sibs) {
+    if (bundleCancel !== cancelAt) throw new Error("cancelled");
+    const r = await lfhRow(rows, k);
+    if (!r.row.ok || r.row.kind !== "file" || r.row.md5 !== row.md5) continue;
+    if (!(firstOf.get(r.row.sha256) <= k)) firstOf.set(r.row.sha256, k);
+    if (r.row.sha256 === row.sha256) same.push(r.row);
+  }
+  const mine = firstOf.get(row.sha256);
+  const base = checked && [...firstOf.values()].every(k => k >= mine) ? row.md5 : `${row.md5}.${row.sha256}`;
+  const file = `${base}.bin`;
+  for (const r of same) r.file = file;
+  same.sort((a, b) => a.index - b.index);
+  const zip = zipWriter();
+  zip.add(file, data);
+  zip.add(`${base}.json`, ENC.encode(JSON.stringify({ tool: "apkllm-web", build: BUILD_SHA,
+    input: { name: msg.source?.name ?? null, size: INPUT.size, md5: INPUT.md5, sha256: INPUT.sha256 },
+    not_device_view: true, rule: LFH_RULE, naming: NAMING, stop: LFH.stop, file, md5: row.md5, sha256: row.sha256,
+    md5_siblings: checked ? { checked: sibs.length, other_contents: firstOf.size - 1 } : { checked: false, reason: `over the LFH sibling budget (${sibs.length} same-size entries, each a whole-file walk) — collision-proof {md5}.{sha256} name used` },
+    entries: same }, null, 1)));
+  return { ok: true, blob: zip.finish(), base, md5: row.md5, entry: row, same: same.length };
+}
+
 async function handle(e, cancelAt) {
   const { id, type } = e.data;
   try {
@@ -456,6 +520,7 @@ async function handle(e, cancelAt) {
       if (result.ok && result.data) transfer = [result.data.buffer];
     }
     else if (type === "single") result = await single(e.data);
+    else if (type === "lfhSingle") result = await lfhSingle(e.data, cancelAt);
     else if (type === "bundle") result = await bundle(e.data, (done, total) => self.postMessage({ id, progress: { done, total } }), cancelAt);
     else throw new Error("unknown message type: " + type);
     self.postMessage({ id, ok: true, result }, transfer);

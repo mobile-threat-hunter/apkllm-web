@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "a457343-1";
+window.__APKLLM_BUILD = "1cb0782-1";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -155,6 +155,7 @@ window.__APKLLM_BUILD = "a457343-1";
     transition:background 220ms var(--e-out), color 220ms var(--e-out);
   }
   #tabs .tab + .tab { margin-left:-1px; }
+  #tabs .tab.off { display:none; }
   #tabs .tab:hover { background:linear-gradient(180deg, var(--bg-4) 0%, var(--bg-3) 100%); color:var(--fg); z-index:1; }
   #tabs .tab.on {
     background:var(--bg); color:var(--fg); font-weight:700; z-index:2;
@@ -369,6 +370,7 @@ window.__APKLLM_BUILD = "a457343-1";
     <div class="tab" data-tab="images">Images<span class="n" id="n-images"></span></div>
     <div class="tab" data-tab="tamper">Tamper scan<span class="n" id="n-tamper"></span></div>
     <div class="tab" data-tab="signing">Signing<span class="n" id="n-signing"></span></div>
+    <div class="tab off" data-tab="lfh" id="tab-lfh">LFH chain<span class="n" id="n-lfh"></span></div>
   </div>
 
   <!-- ── Install gate ─────────────────────────────────────────────── -->
@@ -486,6 +488,27 @@ window.__APKLLM_BUILD = "a457343-1";
     </div>
   </section>
 
+  <!-- ── LFH chain (apkllm #98 — only for a file the device reader refuses) ── -->
+  <section class="panel" id="panel-lfh">
+    <div class="card">
+      <h2>LFH chain <span class="tiny">(the device's reader refuses this file — what a sequential reader finds from offset 0: the headers' own account, not the device's view)</span><button class="copybtn" type="button" data-copy="lfh-head" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div id="lfh-head"></div>
+    </div>
+    <div class="card">
+      <h2>Checks<button class="copybtn" type="button" data-copy="lfh-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <ul class="checks scrollbox" id="lfh-checks" tabindex="0" role="region" aria-label="LFH chain checks"></ul>
+    </div>
+    <div class="card">
+      <h2>Entries <span class="tiny">(in file order — only an entry whose own CRC-32 matches can be downloaded)</span><button class="copybtn" type="button" data-copy="lfh-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div class="toolbar">
+        <input type="search" id="lfh-filter" placeholder="filter by name…">
+        <span class="count" id="lfh-count"></span>
+        <span class="tiny" id="lfh-status"></span>
+      </div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="LFH chain entries"><table id="lfh-table"></table></div>
+    </div>
+  </section>
+
   <!-- ── Tamper scan ──────────────────────────────────────────────── -->
   <section class="panel" id="panel-tamper">
     <div class="card">
@@ -597,7 +620,7 @@ async function loadFile(file) {
   gateClassOn = new Set(CLASS_ORDER);
   xReaderOn = null; xSel = new Set(); setXStatus("");
   stopImages();
-  for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#images-filter", "#tamper-filter"]) $(id).value = "";
+  for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#images-filter", "#tamper-filter", "#lfh-filter"]) $(id).value = "";
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (gen !== loadGen) return;
@@ -608,7 +631,17 @@ async function loadFile(file) {
     if (gen !== loadGen) return;
     report = next; reportGen = gen;
     renderAll();
+    // a file the device reader refuses opens on its LFH chain (the one view with entries); any
+    // other file never shows that tab, and a previous file's LFH tab gives way to the Install gate
+    // the tab shows whenever the walk was attempted (libziparchive's open_error) — an LFH walk that
+    // itself failed shows its error there; it opens first only when it has entries (a non-ZIP drop
+    // has none: no local header at offset 0). Switched after #app is shown: a scroll reset under
+    // display:none is ignored.
     drop.classList.add("hidden"); $("#app").classList.add("on");
+    const lfhTab = $("#tab-lfh"), lfh = report.lfh;
+    lfhTab.classList.toggle("off", !lfh);
+    if (lfh && (!lfh.ok || lfh.entries_total > 0)) lfhTab.click();
+    else if (lfhTab.classList.contains("on")) document.querySelector('#tabs .tab[data-tab="gate"]').click();
     resetPanelScroll(document.querySelector(".panel.on"));
     statusEl.innerHTML = "engine ready · <b>" + esc(file.name) + "</b>";
   } catch (e) {
@@ -673,7 +706,7 @@ async function rerunGate() {
 
 // ── rendering ────────────────────────────────────────────────────────────
 function renderAll() {
-  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderFrosting(); renderCerts(); renderTraces(); }
+  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderFrosting(); renderCerts(); renderTraces(); renderLfh(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -700,6 +733,9 @@ function renderFilebar() {
   if (fr.ok && fr.present) pills.push(!frostClaim(fr) ? '<span class="pill warn">Play frosting not verified</span>'
     : fr.uncovered_signer_schemes?.length ? `<span class="pill warn">Play frosting verified · ${fr.uncovered_signer_schemes.map(k => SCHEME_NAME[k]).join(" / ")} signer not bound</span>` : '<span class="pill info">Play frosting verified</span>');
   if (content.ok && content.summary.role_mismatch) pills.push(`<span class="pill bad">${content.summary.role_mismatch} role mismatch</span>`);
+  const lfh = report.lfh;
+  if (lfh && !lfh.ok) pills.push('<span class="pill bad" data-lfh>LFH chain unavailable</span>');
+  if (lfh?.ok && lfh.applies) pills.push(`<span class="pill warn" data-lfh>LFH chain: ${lfh.entries_total} entr${lfh.entries_total === 1 ? "y" : "ies"} · ${lfh.deliverable_total} recoverable — not the device's view</span>`);
   $("#fpills").innerHTML = pills.join(" ");
   // tab count badges (dexllm-web .dextab .n). The number is the entry count (tamper: finding
   // count / "clean"; signing: pair count / "none"); the colour follows the SAME verdict
@@ -720,6 +756,8 @@ function renderFilebar() {
   else badge("#n-tamper", "failed", "alert");
   // amber: a pair walk stopped at a malformed pair, an ID occurs twice (only its first is read), or
   // a gate both AOSP readers apply first fails (then neither consumes the block)
+  if (lfh && !lfh.ok) badge("#n-lfh", "failed", "alert");
+  if (lfh?.ok && lfh.applies) badge("#n-lfh", lfh.entries_total, lfh.deliverable_total < lfh.entries_total ? "warn" : null);
   if (signing.ok) badge("#n-signing", signing.found ? signing.pairs_total : "none", signing.found && (signing.walk_error || signing.duplicate_ids.length || !signing.cd_contiguous || signing.zip64_locator_present) ? "warn" : null);
   else badge("#n-signing", signingFailLabel(signing), "alert");
 }
@@ -732,7 +770,7 @@ function renderGate() {
   const v = $("#gate-verdict");
   if (!g.ok) {
     v.innerHTML = `<span class="pill bad">libziparchive refused to open</span> <span class="err">${esc(g.error)}</span>
-      <p class="note">The device's own reader rejects this container; see the Tamper scan tab for what the raw walk sees.</p>`;
+      <p class="note">The device's own reader rejects this container; see the Tamper scan tab for what the raw walk sees${report.lfh ? ", and the <b>LFH chain</b> tab for what a sequential reader finds in it" : ""}.</p>`;
     $("#gate-checks").innerHTML = ""; $("#gate-table").innerHTML = ""; $("#gate-chips").innerHTML = ""; $("#gate-count").textContent = "";
     return;
   }
@@ -1429,6 +1467,11 @@ const checksText = (checks) => tsv(["ok", "id", "severity", "reason", "detail"],
 // an ok:false part copies its reason instead of nothing
 const unavailable = (r, what) => `${what}\t${cell(r.error)}`;
 const COPY = {
+  "lfh-head": () => !report.lfh ? "LFH chain\tnot run — the device reader opens this file" : !report.lfh.ok ? unavailable(report.lfh, "LFH chain unavailable")
+    : `not_device_view\ttrue\nopen_error\t${cell(JSON.stringify(report.content.open_error ?? report.traces.open_error ?? null))}\ncaveat\t${cell("the headers' own account: a complete chain never proves that nothing is hidden (apkllm D25)")}\n` + kvText($("#lfh-head")),
+  "lfh-checks": () => report.lfh?.applies ? checksText(report.lfh.checks) : "LFH chain\tnot run",
+  "lfh-entries": () => report.lfh?.applies ? tsv(["#", "name", "name_hex", "offset", "data_offset", "method", "flags", "compressed", "uncompressed", "crc32", "crc_ok", "deliverable", "why"],
+    report.lfh.entries.map((e, i) => [i, e.name, e.name_hex ?? "", e.offset, e.data_offset, e.method, e.flags, e.compressed_size ?? "", e.uncompressed_size ?? "", e.crc32 ?? "", tri3(e.crc_ok), e.deliverable, e.why ?? ""])) : "LFH chain\tnot run",
   "gate-verdict": () => report.gate.ok ? kvText($("#gate-verdict")) || $("#gate-verdict").textContent.trim() : unavailable(report.gate, "libziparchive refused to open"),
   "gate-checks": () => report.gate.ok ? checksText(report.gate.checks) : unavailable(report.gate, "libziparchive refused to open"),
   "gate-entries": () => report.gate.ok ? tsv(["#", "name", "class", "method", "uncompressed", "compressed", "data_offset", "aligned_4k", "aligned_16k", "primary_multidex", "gate", "passes", "conditional", "install_fatal", "reason", "needs"],
@@ -1509,8 +1552,9 @@ const ITEM = {
   gate: (i) => report.gate.entries?.[i]?.name, extract: (i) => report.gate.extract?.entries?.[i]?.name,
   content: (i) => report.content.entries?.[i]?.name, tamper: (i) => report.tamper.entries?.[i]?.name,
   finding: (i) => report.tamper.findings?.[i]?.entry, images: (k) => imgItems[k]?.name,
+  lfh: (i) => report.lfh?.entries?.[i]?.name,
 };
-const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", images: "Images", tamper: "Tamper scan", signing: "Signing" };
+const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", images: "Images", tamper: "Tamper scan", signing: "Signing", lfh: "LFH chain" };
 let pendingCopy = 0;
 // one delegated listener: card buttons + click-to-copy items (rows re-render, so no per-node wiring)
 document.addEventListener("click", (e) => {
@@ -1537,6 +1581,74 @@ document.addEventListener("click", (e) => {
     else copyText(name, item);
   }
 });
+
+// LFH chain (container.lfh_chain, apkllm #98 / D25) -------------------------
+// Shown only when libziparchive itself refused the file (`open_error`). The engine's walk whole:
+// the Local File Header chain from offset 0, never a signature scan; an entry is recoverable only
+// when its own CRC-32 matches. Not the device's view and never a verdict.
+const LFH_STOP = {
+  central_directory: "the entries end at a Central Directory", signing_block: "the walk reached an APK Signing Block framing — it ends the entries only where a Central Directory or EOCD follows it (see the detail and lfh_chain.complete)",
+  eocd: "the entries end at the End of Central Directory", end_of_file: "the file ends right after an entry and no Central Directory follows — whether entries were cut off is unknown",
+  truncated: "the file ends inside a record (a header, a name, entry data, a deflate stream or a data descriptor) — a download cut short", boundary_unknown: "a data-descriptor entry that is not deflate — its end is unknown without the Central Directory",
+  no_lfh_at_0: "offset 0 holds no Local File Header (data before it, an empty file, or not a ZIP)", chain_broken: "an entry's end starts no record",
+  size_conflict: "two sizes disagree", descriptor_mismatch: "the data descriptor disagrees with the stream", descriptor_ambiguous: "the data descriptor reads both with and without its signature",
+  inflate_error: "a deflate stream is corrupt", inflate_budget: "the 4 GiB inflate budget is spent", zip64_unreadable: "a 0xFFFFFFFF size with no ZIP64 extra holding both sizes",
+  entry_cap: "65 536 rows kept",
+};
+const LFH_WHY = {
+  encrypted: "encrypted", unsupported_method: "a method other than stored / deflate", crc_mismatch: "its CRC-32 does not match",
+  duplicate_name: "its name is listed more than once — none is picked", size_mismatch: "the inflated size differs", stored_size_mismatch: "the stored sizes differ",
+  inflate_error: "the deflate stream is corrupt", inflate_budget: "the inflate budget is spent",
+};
+function renderLfh() {
+  const c = report.lfh, h = $("#lfh-head");
+  if (!c?.ok || !c.applies) {   // ok false: the walk itself failed (shown); no chain: tab hidden
+    h.innerHTML = c && !c.ok ? `<span class="pill bad">unavailable</span> <span class="err">${vis(c.error)}</span>` : "";
+    $("#lfh-checks").innerHTML = ""; $("#lfh-table").innerHTML = ""; $("#lfh-count").textContent = ""; $("#lfh-status").textContent = "";
+    return;
+  }
+  const st = c.stop, cf = c.cd_fragment;
+  h.innerHTML = `<p class="note"><span class="pill warn">LFH chain — not the device's view</span> The device's reader (${esc(report.content.open_error?.reader ?? "libziparchive")}: ${esc(report.content.open_error?.name ?? report.content.error ?? "")}) refuses this file. These are the Local File Headers read in sequence from offset 0 — each next header where the previous entry's data ends, never a scan. A complete chain never proves that nothing is hidden: bytes no Central Directory references can hold headers the walk follows.</p>
+  <dl class="kv">
+    <dt>file</dt><dd>${fmtSize(c.file_size)} · sha256 <code>${esc(c.file_sha256)}</code></dd>
+    <dt>entries</dt><dd>${c.entries_total} in the chain · <b>${c.deliverable_total}</b> recoverable (CRC-32 matched)</dd>
+    <dt>walk stopped</dt><dd><code>${esc(st.reason)}</code> at offset ${hex(st.offset)}${st.entry === null ? "" : ` (row ${st.entry})`} <span class="tiny">${esc(LFH_STOP[st.reason] ?? "")}${st.detail ? " — " + vis(st.detail) : ""}</span></dd>
+    ${cf ? `<dt>Central Directory left</dt><dd>${cf.records} record${cf.records === 1 ? "" : "s"}${cf.whole ? " (reaches the EOCD)" : ""} · ${cf.disagree} disagree with the chain${cf.uncompared ? ` · ${cf.uncompared} not compared (ZIP64)` : ""}${cf.whole && cf.unlisted_rows ? ` · <span class="pill warn">${cf.unlisted_rows} row${cf.unlisted_rows === 1 ? "" : "s"} no record names</span>` : ""}</dd>` : ""}
+  </dl>`;
+  renderChecks($("#lfh-checks"), c.checks);
+  renderLfhTable();
+}
+function renderLfhTable() {
+  const c = report.lfh; if (!c?.applies) return;
+  const q = $("#lfh-filter").value.toLowerCase();
+  const rows = c.entries.map((e, i) => ({ e, i })).filter(({ e }) => !q || e.name.toLowerCase().includes(q));
+  $("#lfh-count").textContent = rows.length + " / " + c.entries.length;
+  $("#lfh-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>method</th><th class="num">size</th><th class="num">compressed</th><th class="num">offset</th><th>crc32</th><th>CRC ok</th><th>recoverable</th><th></th></tr></thead><tbody>` +
+    rows.map(({ e, i }) => `<tr class="${e.deliverable ? "" : "fail"}">
+      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="lfh" data-i="${i}" title="click to copy the entry name">${vis(e.name)}</span>${e.name_hex ? ' <span class="pill warn">not UTF-8</span>' : ""}</td>
+      <td>${e.method}${e.flags & 8 ? ' <span class="tiny">DD</span>' : ""}</td>
+      <td class="num">${e.uncompressed_size ?? "—"}</td><td class="num">${e.compressed_size ?? "—"}</td><td class="num">${hex(e.offset)}</td>
+      <td><code>${e.crc32 === null ? "—" : e.crc32.toString(16).padStart(8, "0")}</code></td><td>${tri(e.crc_ok)}</td>
+      <td>${e.deliverable ? '<span class="pill ok">yes</span>' : `<span class="pill bad">no</span> <span class="tiny">${esc(LFH_WHY[e.why] ?? LFH_STOP[e.why] ?? e.why ?? "")}</span>`}</td>
+      <td>${e.deliverable ? `<button data-i="${i}" title="the entry's bytes from the LFH chain (CRC-32 matched), downloaded as {md5}.zip = {md5}.bin + {md5}.json — not the device's view">bytes</button>` : ""}</td></tr>`).join("") + "</tbody>";
+  for (const b of $("#lfh-table").querySelectorAll("button[data-i]")) b.addEventListener("click", () => lfhSave(Number(b.dataset.i), b));
+}
+$("#lfh-filter").addEventListener("input", () => { if (report?.lfh?.applies) renderLfhTable(); });
+const lfhSaving = new Set();
+async function lfhSave(index, el) {
+  if (lfhSaving.has(index) || !report?.lfh?.applies || reportGen !== loadGen) return;
+  const gen = loadGen, cur = report, name = cur.lfh.entries[index]?.name ?? "?";
+  const live = () => gen === loadGen && report === cur, out = $("#lfh-status");
+  lfhSaving.add(index); el.disabled = true; out.innerHTML = `<span class="spin"></span>reading ${vis(name)}…`;
+  try {
+    const r = await wcall({ type: "lfhSingle", index, source: cur.file });
+    if (!live()) return;
+    if (!r.ok) { out.innerHTML = `<span class="err">${vis(name)}: ${esc(r.entry.kind === "directory" ? "a directory entry — nothing to download" : r.entry.error ?? "not recoverable")}</span>`; return; }
+    saveBlob(r.blob, `${r.base}.zip`);
+    out.innerHTML = `⇣ ${r.base}.zip · ${vis(name)} · ${fmtSize(r.entry.size)} <span class="tiny">(LFH chain, not the device's view)</span>`;
+  } catch (e) { if (live()) out.innerHTML = `<span class="err">${vis(name)}: ${esc(e.message)}</span>`; }
+  finally { lfhSaving.delete(index); el.disabled = false; }
+}
 
 // Tamper -------------------------------------------------------------------
 function renderTamper() {

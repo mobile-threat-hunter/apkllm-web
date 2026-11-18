@@ -182,6 +182,7 @@ add_library(apk_native_static STATIC
     ${APKLLM_ROOT}/native/container/magic.cpp
     ${APKLLM_ROOT}/native/container/content_map.cpp
     ${APKLLM_ROOT}/native/apksig/frosting.cpp
+    ${APKLLM_ROOT}/native/container/lfh_chain.cpp
 )
 target_include_directories(apk_native_static PUBLIC
     ${APKLLM_ROOT}/native/container ${APKLLM_ROOT}/native/apksig)
