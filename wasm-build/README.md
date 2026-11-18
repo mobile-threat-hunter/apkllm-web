@@ -32,7 +32,8 @@ python3 tamper_fixtures.py /tmp/fx && node smoke.mjs /tmp/fx/*.apk   # tamper fi
 # frosting fixtures (test-key signed: verified / forged / replay / duplicate / > 1024 splits /
 # malformed / key index past the list / a signature past 141 bytes / a non-DER one — #83's
 # no-keys cases; apkllm #87's container gap / value under 4 bytes / malformed protobuf with a forged
-# signature) come from apkllm's tests/frostfix.py — crafted per session
+# signature) come from apkllm's tests/frostfix.py — crafted per session; LFH-chain fixtures (#98) are
+# real APKs cut short: at 30% / 90%, at the CD offset, mid-CD, without the EOCD
 cp build/apkllm.js build/apkllm.wasm ..         # then bump window.__APKLLM_BUILD in index.html
 ```
 
@@ -52,7 +53,8 @@ node xcheck.mjs /tmp/native.json                # → ALL MATCH
 
 `xcheck` compares, since #67, the engine's own results on both sides — content_map, tamper_report,
 install_gate + extract_report (seven manifest / split-fact combinations), build_traces,
-signing_certs and frosting (under the built-in key and every `--frost-key`) — whole, key order
+signing_certs, frosting (under the built-in key and every `--frost-key`) and lfh_chain (+ every
+row's lfh_chain_entry bytes) — whole, key order
 included, and `signing_block` as `domain.js` names it. Where the platform legitimately differs it
 compares less: libziparchive's iteration order is `std::hash` order, which differs between
 wasm32 and x86_64, so entry rows and `exceptions` are compared by name and a histogram's tie order
@@ -72,7 +74,7 @@ bytes, or the identical rejection error).
 - `wasm_module.cpp` — embind functions mirroring `apkllm/native/binding/module.cpp`
   one-to-one (`abi`, `installGate`, `extractPlan`, `extractEntry`, `entryHeads` (+ the `names`
   filter), `contentMap`, `tamperReport`, `signingBlockPairs`, `buildTraces`, `signingCerts`,
-  `frosting`; an engine `Value` converted as `ToPy` does — map keys in order, strings as CPython's
+  `frosting`, `lfhChain` / `lfhChainEntry` (#98); an engine `Value` converted as `ToPy` does — map keys in order, strings as CPython's
   UTF-8 "replace", a computed key defined as an own property; same field names incl. `name_hex` / `entry_hex` for a name that is not strict
   UTF-8, Python `None` ⇄ JS `null`; `extractEntry` takes the name as a string or, for a lossy
   name, a `Uint8Array` of its raw bytes — Python's `bytes`; embind checks the argument count, so

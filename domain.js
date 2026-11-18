@@ -14,10 +14,10 @@
 (function (root) {
 "use strict";
 
-// module.cpp's ABI this page is written against (14 = Play Store 54.0.09's frosting check, apkllm #87):
+// module.cpp's ABI this page is written against (17 = the LFH chain + open_error, apkllm #98 / #100):
 // the worker refuses
 // an apkllm.wasm with another, so a stale cached engine never feeds this page a different shape.
-const ENGINE_ABI = 14;
+const ENGINE_ABI = 17;
 const HEAD_BYTES = 512;   // magic.HEAD_BYTES: content_map's head per entry
 
 // ── container.signing_block ───────────────────────────────────────────────

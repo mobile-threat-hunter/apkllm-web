@@ -83,6 +83,12 @@ try {
   await waitFor(`document.querySelector("#app").classList.contains("on") || document.querySelector("#status").textContent.includes("failed")`);
   const st = await evalJs(`document.querySelector("#status").textContent`);
   console.log("status:", st);
+  // apkllm #98: a file libziparchive refuses opens on its LFH chain tab; any other file never shows it
+  const lfh0 = JSON.parse(await evalJs(`JSON.stringify({ run: !!report?.lfh, applies: !!report?.lfh?.applies, openError: !!(report?.content?.open_error || report?.traces?.open_error),
+    first: !!report?.lfh && (!report.lfh.ok || report.lfh.entries_total > 0),
+    shown: !document.querySelector("#tab-lfh").classList.contains("off"), active: document.querySelector("#tabs .tab.on")?.dataset.tab })`));
+  if (lfh0.run !== lfh0.openError || (lfh0.run && !lfh0.applies && !lfh0.first)) fail("LFH chain run ≠ libziparchive's open_error: " + JSON.stringify(lfh0));
+  if (lfh0.shown !== lfh0.run || (lfh0.first ? lfh0.active !== "lfh" : lfh0.active === "lfh")) fail("LFH chain tab state wrong: " + JSON.stringify(lfh0));
   if (st.includes("failed")) fail("load failed");
   const state = await evalJs(`JSON.stringify({
     pills: document.querySelector("#fpills").textContent.trim(),
@@ -576,8 +582,48 @@ try {
   if (fz.builtin !== fz.builtinWant) fail("built-in key match shown ≠ the engine's key_list_index");
   if (fz.sig === true && fz.region && !fz.builtinWant) fail("a verified frosting whose recovered keys do not include the built-in key");
   if (fz.region && !fz.sigBytes) fail("located signature neither shown nor marked too long");
+  // LFH chain (#98): every row listed, a download button exactly on the recoverable rows, the
+  // "not the device's view" label on the card and the filebar; one row downloaded and checked here
+  if (lfh0.applies) {
+    const lf = JSON.parse(await evalJs(`(async()=>{
+      document.querySelector('[data-tab="lfh"]').click();
+      const c = report.lfh, rows = document.querySelectorAll("#lfh-table tbody tr").length;
+      const btnSet = [...document.querySelectorAll("#lfh-table button[data-i]")].map(b => +b.dataset.i).join(","), want = c.entries.map((e, k) => e.deliverable ? k : -1).filter(k => k >= 0).join(",");
+      const label = /not the device's view/.test(document.querySelector("#lfh-head").textContent), pill = !!document.querySelector("#fpills [data-lfh]");
+      // a non-UTF-8 name first (its lookup goes by raw bytes, name_hex), else the first file row
+      let i = c.entries.findIndex(e => e.deliverable && e.name_hex);
+      if (i < 0) i = c.entries.findIndex(e => e.deliverable && !e.name.endsWith("/"));
+      let got = null;
+      if (i >= 0) {
+        let blob = null, name = null; const orig = window.saveBlob; window.saveBlob = (b, n) => { blob = b; name = n; };
+        document.querySelector('#lfh-table button[data-i="' + i + '"]').click();
+        for (let t = 0; t < 300 && !blob; t++) await new Promise(r => setTimeout(r, 100));
+        window.saveBlob = orig;
+        if (blob) { const u8 = new Uint8Array(await blob.arrayBuffer()); let bin = "";
+          for (let k = 0; k < u8.length; k += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(k, k + 0x8000));
+          got = { name, b64: btoa(bin), entry: c.entries[i].name, crc: c.entries[i].crc32, size: c.entries[i].uncompressed_size }; }
+        else got = { err: document.querySelector("#lfh-status").textContent };
+      }
+      return JSON.stringify({ rows, want: c.entries_total, btnsOk: btnSet === want, label, pill, got,
+        copy: COPY["lfh-entries"]().split("\\n").length - 1 });
+    })()`));
+    console.log("lfh:", JSON.stringify({ ...lf, got: lf.got && { name: lf.got.name, err: lf.got.err } }));
+    if (lf.rows !== lf.want) fail(`LFH chain table ${lf.rows} rows ≠ ${lf.want}`);
+    if (!lf.btnsOk) fail("LFH chain download buttons ≠ exactly the recoverable rows");
+    if (!lf.label || !lf.pill) fail("LFH chain shown without its 'not the device's view' label");
+    if (lf.copy !== lf.want) fail("LFH chain copy rows ≠ entries");
+    if (lf.got?.err) fail("LFH chain download failed: " + lf.got.err);
+    else if (lf.got) {
+      const z = unzipStored(Buffer.from(lf.got.b64, "base64")), bins = [...z.keys()].filter(n => n.endsWith(".bin"));
+      const d = bins.length === 1 ? z.get(bins[0]) : null, base = lf.got.name.replace(/\.zip$/, "");
+      const j = z.get(base + ".json") ? JSON.parse(z.get(base + ".json").toString("utf8")) : null;
+      if (!d || !bins[0].startsWith(md5(d))) fail("LFH chain download: bin missing or not named by its md5");
+      else if (d.length !== Number(lf.got.size)) fail("LFH chain download size ≠ the row's");
+      if (!j || j.not_device_view !== true || j.entries?.[0]?.name !== lf.got.entry || j.entries[0].sha256 !== (d && sha256(d))) fail("LFH chain download JSON wrong: " + JSON.stringify(j)?.slice(0, 200));
+    }
+  }
   if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
-    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")]]) {
+    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")], ...(lfh0.applies ? [["lfh", SHOT.replace(/(\.png)?$/, "-lfh.png")]] : [])]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
       const { result: { data } } = await S("Page.captureScreenshot", { format: "png" });
       writeFileSync(file, Buffer.from(data, "base64")); console.log("screenshot:", file);

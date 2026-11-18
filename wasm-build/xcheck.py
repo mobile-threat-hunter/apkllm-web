@@ -9,7 +9,8 @@ Per APK: content_map, tamper_report, install_gate and extract_report for each ma
 split-fact combination in GATE_CASES (since apkllm #67 all four are the engine's, passed
 through by Python as by the web), extract_entry over every entry name (sha256 of the
 device-faithful bytes, or the error), signing_block, build_traces, signing_certs (#58), and the
-engine's frosting check (#59) and signing.frosting's view of it under the built-in key — plus under each --frost-key (a test key
+engine's frosting check (#59), the LFH chain of a file libziparchive refuses (#98: lfh_chain +
+lfh_chain_entry over every row), and signing.frosting's view of it under the built-in key — plus under each --frost-key (a test key
 crafted fixtures are signed with).
 """
 import base64
@@ -52,6 +53,22 @@ def extracted(path, names):
     return out
 
 
+def lfh_entries(path, chain):
+    """lfh_chain_entry over every chain row (#98): sha256 of the bytes, or the engine's refusal."""
+    out = {}
+    if not chain.get("ok") or not chain.get("applies"):
+        return out
+    for e in chain["entries"]:
+        key = "x:" + e["name_hex"] if e.get("name_hex") else "s:" + e["name"]
+        name = bytes.fromhex(e["name_hex"]) if e.get("name_hex") else e["name"]
+        try:
+            d = container.lfh_chain_entry(path, name, max_bytes=512 * 1024 * 1024)
+            out[key] = {"ok": True, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()}
+        except KeyError as err:
+            out[key] = {"ok": False, "error": err.args[0]}
+    return out
+
+
 def exact(o):
     """An int past 2**53 as its decimal string — what the binding hands JS (a double would round it,
     and JSON.parse on the dump would round it the SAME way, hiding the loss)."""
@@ -80,7 +97,10 @@ def main(out, apks, frost_keys):
 
         names = [key(e) for e in g0["entries"]] if g0.get("ok") else [
             key(e) for e in (t.get("entries") or [])]
+        chain = container.lfh_chain(p)
         res[p] = {
+            "lfh_chain": chain,
+            "lfh_entries": lfh_entries(p, chain),
             "content": container.content_map(p),
             "tamper": t,
             "gate": gates,
