@@ -26,6 +26,7 @@
 //   buildTraces(path)
 //   signingCerts(path)                      // #58: signer certificates as present, unverified
 //   frosting(path, keys: Uint8Array[])      // #59: Play's frosting check, keys = DER SPKIs
+//   frostingKeysDefault()                   // signing.FROSTING_KEYS_DEFAULT (base64), from apkllm
 //   lfhChain(path)                          // #98: the LFH chain of a file libziparchive refuses
 //   lfhChainEntry(path, name, maxBytes)     // one deliverable chain entry's bytes (.data)
 // (embind checks the argument count: every argument is passed, null for Python's None default.)
@@ -485,6 +486,18 @@ val Frosting(const std::string& path, val keys) {
     return ToVal(v);
 }
 
+// signing.FROSTING_KEYS_DEFAULT (web #17): generated at build time from the apkllm checkout, so
+// the page runs the frosting check with apkllm's key — base64 SPKI strings, as Python holds them.
+constexpr const char* kFrostingKeysDefault[] = {
+#include "frosting_keys_default.inc"
+};
+
+val FrostingKeysDefault() {
+    val out = val::array();
+    for (const char* k : kFrostingKeysDefault) out.call<void>("push", val(k));
+    return out;
+}
+
 }  // namespace
 
 // ── signing_certs (#58) — module.cpp SigningCertsDict / NameDict / CertDict, key for key ──
@@ -758,6 +771,7 @@ EMSCRIPTEN_BINDINGS(apkllm_wasm) {
     function("buildTraces", &BuildTraces);
     function("signingCerts", &SigningCerts);
     function("frosting", &Frosting);
+    function("frostingKeysDefault", &FrostingKeysDefault);
     function("lfhChain", &LfhChain);
     function("lfhChainEntry", &LfhChainEntry);
 }

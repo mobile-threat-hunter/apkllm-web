@@ -35,11 +35,13 @@
 //
 // Every report is the engine's own (apkllm #67: decided whole in C++, converted one to one by
 // wasm_module.cpp); domain.js adds only what apkllm still decides in Python (signing_block's
-// pair names) and the built-in frosting key. The main thread receives finished report objects.
+// pair names, signing.frosting's view); the built-in frosting key is the engine's
+// (frostingKeysDefault, web #17). The main thread receives finished report objects.
 
 let BUILD_SHA = "";
 let CREATE = null;
 let Module = null;
+let FROST_KEYS = null;   // apkllm's signing.FROSTING_KEYS_DEFAULT as DER, from the engine (web #17)
 let initPromise = null;
 const VFS = "/input.apk";
 let loaded = false;
@@ -58,6 +60,9 @@ function ensureInit() {
   initPromise = CREATE({ locateFile: f => f + qs }).then(m => {
     // a stale cached apkllm.wasm next to a newer page would hand it another result shape
     if (m.abi() !== self.ApkllmDomain.ENGINE_ABI) throw new Error(`engine ABI ${m.abi()} — this page expects ${self.ApkllmDomain.ENGINE_ABI}; reload without cache`);
+    // apkllm's frosting key ships in the engine (web #17); an older cached engine has none
+    if (typeof m.frostingKeysDefault !== "function") throw new Error("engine without its frosting key — reload without cache");
+    FROST_KEYS = self.ApkllmDomain.frostingKeys(m.frostingKeysDefault());
     Module = m;
   });
   return initPromise;
@@ -102,7 +107,7 @@ async function load(bytes) {
   const signing = D.signingBlock(Module.signingBlockPairs(VFS, D.PAIRS_CAP, D.PAIR_IDS));
   const traces = Module.buildTraces(VFS);
   const certs = Module.signingCerts(VFS);
-  const frosting = D.frostingView(Module.frosting(VFS, D.frostingKeys()), signing, tamper);
+  const frosting = D.frostingView(Module.frosting(VFS, FROST_KEYS), signing, tamper);
   const content = Module.contentMap(VFS, D.HEAD_BYTES);
   // the raw device-produced heads ride along (parallel to content.entries — the same libziparchive
   // walk) for the hex view; a row whose name differs gets none rather than another entry's bytes

@@ -109,7 +109,8 @@ for (const [path, n0] of Object.entries(native)) {
     diff(`frosting[keyset ${i}]`, raw, n.frosting[i]);
     diff(`frosting_view[keyset ${i}]`, D.frostingView(raw, sbW, trW, i === 0 ? "builtin" : "caller"), n.frosting_view[i]);
   });
-  diff("frosting.default_key", D.FROSTING_KEYS_DEFAULT, keysets[0]);
+  // the key the page runs with (worker.js) is the engine's copy of signing.FROSTING_KEYS_DEFAULT (#17)
+  diff("frosting.default_key", m.frostingKeysDefault(), keysets[0]);
 
   const normBT = (b) => {
     const o = { ...b };

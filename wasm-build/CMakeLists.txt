@@ -19,6 +19,7 @@ project(apkllm_wasm LANGUAGES C CXX)
 #   emcmake cmake -B build -G Ninja -DAPKLLM_ROOT=/path/to/apkllm [-DAOSP_ROOT=/path/to/aosp]
 #   cmake --build build --parallel
 #
+# Needs python3 on PATH (it reads signing.FROSTING_KEYS_DEFAULT from APKLLM_ROOT; emsdk has one).
 # Outputs: build/apkllm.js + build/apkllm.wasm — copy into apkllm-web/.
 
 set(CMAKE_CXX_STANDARD 23)   # apkllm's own standard
@@ -188,8 +189,22 @@ target_include_directories(apk_native_static PUBLIC
     ${APKLLM_ROOT}/native/container ${APKLLM_ROOT}/native/apksig)
 target_link_libraries(apk_native_static PUBLIC ziparchive_static avb_sha256_static crypto)
 
+# ── signing.FROSTING_KEYS_DEFAULT, generated from the apkllm checkout (web #17): the key the
+#    frosting check runs with is apkllm's, not a copy kept here.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
+set(FROSTING_KEYS_INC "${GEN_DIR}/frosting_keys_default.inc")
+add_custom_command(
+    OUTPUT ${FROSTING_KEYS_INC}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${GEN_DIR}
+    COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/gen_frosting_keys.py
+            ${APKLLM_ROOT}/src/apkllm/signing.py ${FROSTING_KEYS_INC}
+    DEPENDS ${APKLLM_ROOT}/src/apkllm/signing.py ${CMAKE_CURRENT_SOURCE_DIR}/gen_frosting_keys.py
+    VERBATIM)
+
 # ── Embind binding (this file).
-add_executable(apkllm wasm_module.cpp)
+add_executable(apkllm wasm_module.cpp ${FROSTING_KEYS_INC})
+target_include_directories(apkllm PRIVATE ${GEN_DIR})
 target_link_libraries(apkllm PRIVATE apk_native_static)
 target_compile_options(apkllm PRIVATE -O3)
 # Single-threaded (-pthread stays OFF), modularised, growable memory, MEMFS

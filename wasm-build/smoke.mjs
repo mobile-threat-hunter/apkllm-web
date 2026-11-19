@@ -6,6 +6,7 @@
 //
 //   node smoke.mjs [apk ...]      (defaults to dexllm's test_apk fixtures)
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { argv } from "node:process";
 import createApkllm from "./build/apkllm.js";
 
@@ -38,8 +39,15 @@ const EXPECT_WOULD_OPEN = { dup: false, janus: false, cdforge: true, ctor: true,
 
 const m = await createApkllm();
 console.log("engine loaded, ABI", m.abi());
-// signing.FROSTING_KEYS_DEFAULT (domain.js carries the same)
-const FROST_KEY = Uint8Array.from(atob("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZH2+1+E07dnErAD3L6BbTnaohU0bbXriNlJI7VxJU+LjdSwPyXR5pomARAMoyPkMksLz/gitUPtFuJoPL2ziEw=="), c => c.charCodeAt(0));
+// signing.FROSTING_KEYS_DEFAULT, compiled in from the apkllm checkout (web #17) — the whole list,
+// as worker.js passes it (xcheck compares it to the Python constant)
+const FROST_B64 = m.frostingKeysDefault();
+if (!Array.isArray(FROST_B64) || FROST_B64.length < 1) throw new Error("engine has no frosting key");
+const FROST_KEYS = FROST_B64.map(k => Uint8Array.from(atob(k), c => c.charCodeAt(0)));
+// the page serves the repo-root copy: it must be the engine checked here (and by xcheck)
+const sha = (f) => createHash("sha256").update(readFileSync(new URL(f, import.meta.url))).digest("hex");
+for (const f of ["apkllm.wasm", "apkllm.js"])
+  if (sha("./build/" + f) !== sha("../" + f)) throw new Error(`../${f} is not build/${f} — copy the build to the repo root`);
 // module.cpp's argument list: path, extract_native_libs, target_sdk, page_size, apk_role, role_defaulted, isolated, feature, config_for
 const GATE = (path) => [path, null, null, 4096, "base", true, null, null, null];
 
@@ -151,7 +159,7 @@ for (const path of TESTS) {
   if (cm.ok && heads.ok && cm.entries.some((e, i) => heads.entries[i]?.name !== e.name || heads.entries[i]?.name_hex !== e.name_hex)) fail("contentMap rows do not align with entryHeads rows");
   if (cm.ok && cm.checks.length !== 2) fail("contentMap: not its two checks");
 
-  const fr = m.frosting(VFS, [FROST_KEY]);
+  const fr = m.frosting(VFS, FROST_KEYS);
   console.log("  frosting ok=", fr.ok, fr.ok ? `play_result=${fr.play_result} present=${fr.present} signature=${fr.signature} digest=${fr.file_digest_match} catalog=${fr.protobuf?.catalog?.length ?? "-"}` : `error=${fr.error}`);
   if (!fr.ok) fail(`frosting failed: ${fr.error}`);
   else {

@@ -26,6 +26,8 @@ embuilder build zlib                            # once per fresh emsdk: a parall
 cd wasm-build
 emcmake cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DAPKLLM_ROOT=/home/nyahumi/Project/apkllm   # -DAOSP_ROOT defaults to ~/Project/aosp
+                                                 # python3 on PATH: the frosting key is read from it
+                                                 # (APKLLM_ROOT = the commit index.html's pin names)
 cmake --build build --parallel
 node smoke.mjs                                  # real APKs from dexllm/test_apk + a non-zip
 python3 tamper_fixtures.py /tmp/fx && node smoke.mjs /tmp/fx/*.apk   # tamper findings path
@@ -110,8 +112,12 @@ bytes, or the identical rejection error).
   double-click and no clipboard write), copy buttons and tab badges. `shot.png` → Tamper scan tab,
   `shot-extract.png` → Extract tab.
 - `../domain.js` (repo root) — what apkllm still decides in Python: `container.signing_block`'s
-  pair naming over `signingBlockPairs`, and `signing.FROSTING_KEYS_DEFAULT`; plus the engine ABI
-  the page expects (the worker refuses another `apkllm.wasm`).
+  pair naming over `signingBlockPairs`, and `signing.frosting`'s view over the raw check; plus the
+  engine ABI the page expects (the worker refuses another `apkllm.wasm`).
+- `gen_frosting_keys.py` — the build step that reads `signing.FROSTING_KEYS_DEFAULT` from
+  `APKLLM_ROOT/src/apkllm/signing.py` (with `ast`, no import) into the engine:
+  `frostingKeysDefault()` is the key the page and the smoke test run the frosting check with
+  (#17), and `xcheck` compares it to the Python constant.
 
 ## Lessons carried from dexllm-web / axmlllm-web
 
