@@ -6,7 +6,6 @@
 // what container.py / signing.py still own:
 //
 //   container.signing_block   → signingBlock (naming the pair IDs over signing_block_pairs)
-//   signing.FROSTING_KEYS_DEFAULT → the built-in key the frosting check is run with (#59)
 //   signing.frosting          → frostingView (the claim rules + container view over the raw check)
 //
 // Verified against the Python layer by wasm-build/xcheck.{py,mjs}. Plain script (no modules)
@@ -68,13 +67,10 @@ function signingBlock(r) {
 }
 
 // ── signing.frosting (#59) ──────────────────────────────────────────────────
-// signing.FROSTING_KEYS_DEFAULT: Play's frosting verification key (SPKI SHA-256 7c5ce2a4…,
-// recovered from Play signatures), base64 DER SubjectPublicKeyInfo — the engine takes the DER.
-const FROSTING_KEYS_DEFAULT = [
-  "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZH2+1+E07dnErAD3L6BbTnaohU0bbXriNlJI7VxJU+Lj" +
-  "dSwPyXR5pomARAMoyPkMksLz/gitUPtFuJoPL2ziEw==",
-];
-const frostingKeys = () => FROSTING_KEYS_DEFAULT.map(k => Uint8Array.from(atob(k), c => c.charCodeAt(0)));
+// The key the frosting check runs with is apkllm's signing.FROSTING_KEYS_DEFAULT, compiled into
+// the engine from the apkllm checkout (Module.frostingKeysDefault(), web #17) — no copy here.
+// base64 DER SubjectPublicKeyInfo → the DER bytes the engine takes.
+const frostingKeys = (b64) => b64.map(k => Uint8Array.from(atob(k), c => c.charCodeAt(0)));
 
 // signing.frosting's view over the engine's raw check (signing.py frosting / _frosting_view /
 // _proto_signed, key for key): `signature` from Play's own result; `file_digest_match` only once the
@@ -140,5 +136,5 @@ function frostingView(raw, sb, tr, keysSource = "builtin") {
 }
 
 root.ApkllmDomain = { ENGINE_ABI, HEAD_BYTES, PAIR_NAMES, PAIR_IDS, PAIRS_CAP, signingBlock,
-                      FROSTING_KEYS_DEFAULT, frostingKeys, frostingView };
+                      frostingKeys, frostingView };
 })(typeof self !== "undefined" ? self : globalThis);
