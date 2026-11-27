@@ -19,7 +19,7 @@
 //                                           // extract_map (false) / extract_report (true)
 //   extractEntry(path, name, maxBytes)      // name: string, or Uint8Array of raw bytes (name_hex)
 //                                           // .data is a Uint8Array copy
-//   entryHeads(path, n, names: string[]|null) // each .head is a Uint8Array copy
+//   entryHeads(path, n, names: (string|Uint8Array)[]|null) // each .head is a Uint8Array copy
 //   contentMap(path, headBytes)
 //   tamperReport(path)
 //   signingBlockPairs(path, cap, track: number[])
@@ -309,12 +309,23 @@ val ExtractEntry(const std::string& path, val name, double max_bytes) {
     return out;
 }
 
-// A JS array of strings → std::vector<std::string> (each encoded UTF-8, as pybind11 casts a str).
+// A JS array → std::vector<std::string>, as pybind11 casts a list of str / bytes: a string is
+// encoded UTF-8, a Uint8Array is taken as raw bytes (an entry whose name_hex is set, as in
+// extractEntry: a JS string cannot carry its bytes).
 std::vector<std::string> StringVector(const val& arr) {
     std::vector<std::string> v;
     const unsigned n = arr["length"].as<unsigned>();
     v.reserve(n);
-    for (unsigned i = 0; i < n; ++i) v.push_back(arr[i].as<std::string>());
+    const val u8 = val::global("Uint8Array");
+    for (unsigned i = 0; i < n; ++i) {
+        const val x = arr[i];
+        if (x.instanceof(u8)) {
+            std::vector<uint8_t> raw = emscripten::convertJSArrayToNumberVector<uint8_t>(x);
+            v.emplace_back(raw.begin(), raw.end());
+        } else {
+            v.push_back(x.as<std::string>());
+        }
+    }
     return v;
 }
 

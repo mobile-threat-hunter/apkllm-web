@@ -82,7 +82,8 @@ bytes, or the identical rejection error).
   name, a `Uint8Array` of its raw bytes — Python's `bytes`; embind checks the argument count, so
   every argument is passed, `null` where Python takes its `None` default).
 - `smoke.mjs` — node smoke test; self-consistency across the functions (contentMap rows align
-  with entryHeads rows — the worker pairs them for the hex view; a frosting protobuf only under a
+  with entryHeads rows — the worker pairs them for the hex view; a one-name entryHeads (string or raw-byte
+  name) extends that head (show more); a frosting protobuf only under a
   verified signature). Ground truth is `xcheck`.
 - `tamper_fixtures.py` — synthesizes the fixtures: dup-name / Janus / CD-method-forged
   (shapes from `apkllm/tests/test_checks.py`, the findings path) plus the review-found
@@ -102,15 +103,18 @@ bytes, or the identical rejection error).
   (junk between CD and EOCD), `mfcut` (a main section past the 4 KiB head), `v1many` (70 v1 files).
 - `xcheck.py` / `xcheck.mjs` — native-vs-wasm field-by-field comparison (above).
 - `browser_check.mjs` — serves the repo root, drives `index.html` over CDP, feeds an
-  APK through the file input and asserts every panel rendered; on the Extract tab it runs
+  APK through the file input and asserts every panel rendered (the Container tab's entry table
+  joins every gate row to its plan and content rows; its badge turns red when any of the four
+  views flags something); on the Container tab it runs
   "extract all", captures the zip blob and checks it in node with `node:crypto` (every file
   is `{md5}.bin` of its own content — `{md5}.{sha256}.bin` for readers.apk's real MD5 collision
   pair —, the report is `{input md5}.json`, every entry is a file, a directory or a failure with
   a cause, the four-reader rule), single-entry downloads named exactly as the bundle names them
   (identical-content twins → the same file and JSON), the row double-click download (content
   and naming checked on a synthetic dblclick; real CDP mouse input checks one download per
-  double-click and no clipboard write), copy buttons and tab badges. `shot.png` → Tamper scan tab,
-  `shot-extract.png` → Extract tab.
+  double-click and no clipboard write), the hex view's show more (the longer head extends the
+  load's, 64 KiB then 1 MiB, "(whole entry)" only when every byte is there), copy buttons and tab
+  badges. `shot.png` → Container tab, `shot-entries.png` → its entry table with a hex dump.
 - `../domain.js` (repo root) — what apkllm still decides in Python: `container.signing_block`'s
   pair naming over `signingBlockPairs`, and `signing.frosting`'s view over the raw check; plus the
   engine ABI the page expects (the worker refuses another `apkllm.wasm`).

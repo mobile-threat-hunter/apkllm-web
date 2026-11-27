@@ -92,10 +92,11 @@ try {
   if (st.includes("failed")) fail("load failed");
   const state = await evalJs(`JSON.stringify({
     pills: document.querySelector("#fpills").textContent.trim(),
-    gateRows: document.querySelectorAll("#gate-table tbody tr").length,
+    gateRows: document.querySelectorAll("#entries-table tbody tr").length,
     gateChecks: document.querySelectorAll("#gate-checks li").length,
     verdict: document.querySelector("#gate-verdict").textContent.replace(/\\s+/g," ").slice(0,160),
-    contentRows: document.querySelectorAll("#content-table tbody tr").length,
+    contentRows: report.content.ok ? report.content.entries.length : 0,
+    contentCells: report.content.ok ? [...document.querySelectorAll("#entries-table tbody tr")].filter(tr => tr.dataset.ci !== "-1").length : 0,
     contentChecks: document.querySelectorAll("#content-checks li").length,
     tamperRows: document.querySelectorAll("#tamper-table tbody tr").length,
     tamperChecks: document.querySelectorAll("#tamper-checks li").length,
@@ -107,13 +108,25 @@ try {
   const gateOpened = !s.verdict.includes("refused");
   if (gateOpened && (s.gateRows === 0 || s.gateChecks !== 4)) fail("gate panel empty");
   if (gateOpened && s.contentRows === 0) fail("content panel empty");
+  // every gate row joins its content row (the same libziparchive walk, keyed by the raw name)
+  if (gateOpened && s.contentRows && s.contentCells !== s.gateRows) fail(`${s.gateRows - s.contentCells} entry rows without their content row`);
   if (s.tamperChecks !== 2 && !s.signing.includes("not a ZIP")) fail("tamper checks missing");
   // tab badges follow the panel verdicts: a refused container is a red "refused", never blank
-  const badges = JSON.parse(await evalJs(`JSON.stringify(Object.fromEntries(["gate","extract","content","images","tamper","signing"].map(k => { const el = document.querySelector("#n-" + k); return [k, { t: el.textContent, alert: el.classList.contains("alert") }]; })))`));
+  const badges = JSON.parse(await evalJs(`JSON.stringify(Object.fromEntries(["container","images","signing"].map(k => { const el = document.querySelector("#n-" + k); return [k, { t: el.textContent, alert: el.classList.contains("alert") }]; })))`));
   console.log("badges:", JSON.stringify(badges));
   for (const [k, b] of Object.entries(badges)) if (!b.t) fail(`tab badge ${k} is blank`);
-  if (!gateOpened && !(badges.gate.t === "refused" && badges.gate.alert)) fail("refused container not flagged on the Install gate badge");
-  if (gateOpened && badges.gate.t !== String(s.gateRows)) fail(`gate badge ${badges.gate.t} ≠ ${s.gateRows} entries`);
+  if (!gateOpened && !(badges.container.t === "refused" && badges.container.alert)) fail("refused container not flagged on the Container badge");
+  if (gateOpened && badges.container.t !== String(s.gateRows)) fail(`container badge ${badges.container.t} ≠ ${s.gateRows} entries`);
+  // red whenever one of the four views flags something
+  const want3 = JSON.parse(await evalJs(`JSON.stringify((() => { const g = report.gate, x = g.ok && g.extract.ok ? g.extract.summary : null;
+    return !!(g.ok && (g.installable === false || g.entries.some(e => e.install_fatal) || !x || x.undeliverable || x.device_rejected || !report.content.ok || report.content.summary.role_mismatch || !report.tamper.ok || report.tamper.findings.some(f => f.severity !== "info"))); })())`));
+  if (gateOpened && badges.container.alert !== want3) fail(`container badge alert=${badges.container.alert}, the four views say ${want3}`);
+  // a red badge says why (its tooltip), and every content row shows its own read disposition
+  const why = JSON.parse(await evalJs(`JSON.stringify({ title: document.querySelector("#n-container").title,
+    reads: report.content.ok ? [...document.querySelectorAll("#entries-table tbody tr")].filter(tr => tr.dataset.ci !== "-1")
+      .every(tr => tr.children[[...document.querySelectorAll("#entries-table thead th")].findIndex(th => th.textContent === "read")].textContent.startsWith(report.content.entries[Number(tr.dataset.ci)].disposition)) : true })`));
+  if (badges.container.alert && !why.title) fail("red container badge without a reason");
+  if (!why.reads) fail("entry rows whose read cell is not the content walk's disposition");
   // flip a manifest input and make sure the gate re-runs
   await evalJs(`(async()=>{const s=document.querySelector("#in-enl"); s.value="false"; s.dispatchEvent(new Event("change")); await new Promise(r=>setTimeout(r,800));})()`);
   const echoed = await evalJs(`document.querySelector("#gate-verdict").textContent`);
@@ -132,9 +145,53 @@ try {
     out.back = report.gate.apk_role_source; return JSON.stringify(out); })()`));
   if (gateOpened && (role.role !== "split" || role.source !== "supplied" || role.iso !== true || !role.shown || role.back !== "default")) fail("split facts not passed to / echoed by the engine: " + JSON.stringify(role));
   // content hex view on first row
-  await evalJs(`(()=>{const tr=document.querySelector("#content-table tbody tr"); if(tr) tr.click(); return true;})()`);
+  await evalJs(`(()=>{const tr=document.querySelector("#entries-table tbody tr"); if(tr) tr.click(); return true;})()`);
   const hexLen = await evalJs(`(document.querySelector("#content-hex pre")||{textContent:""}).textContent.length`);
   if (gateOpened && hexLen === 0) fail("hex view empty");
+  // "show more": a row whose head stopped at headBytes reads on through the same reader — the
+  // dump grows to min(64 KiB, the entry's size), the old head is its prefix, the copy follows it
+  const more = JSON.parse(await evalJs(`(async()=>{
+    const c = report.content; if (!c.ok) return JSON.stringify({ skip: true });
+    // the size from the gate's own CD walk, not the head's: an independent account of the entry
+    const key = (x) => (x.name_hex ? "x:" + x.name_hex : "s:" + x.name);
+    const size = new Map((report.gate.entries ?? []).map(e => [key(e), e.uncompressed_size]));
+    // the largest such entry: it exercises both steps (64 KiB, then the 1 MiB ceiling) where it can
+    let i = -1;
+    c.heads.forEach((h, k) => { if (h && h.head.length >= report.headBytes && h.disposition !== "rejected" && h.disposition !== "error"
+      && typeof size.get(key(h)) === "number" && size.get(key(h)) > report.headBytes && (i < 0 || size.get(key(h)) > size.get(key(c.heads[i])))) i = k; });
+    if (i < 0) return JSON.stringify({ skip: true });
+    const tr = document.querySelector('#entries-table tr[data-ci="' + i + '"]');
+    if (!tr) return JSON.stringify({ skip: true });
+    tr.click();
+    const firstWhole = /\(whole entry\)/.test(document.querySelector("#content-hex .hexhead").textContent);
+    const btn = document.querySelector("#hex-more"); if (!btn) return JSON.stringify({ i, btn: false });
+    const asked = Number(btn.dataset.n), old = c.heads[i].head;
+    btn.click();
+    for (let t = 0; t < 300 && hexView.h === c.heads[i] && !/could not/.test(document.querySelector("#content-hex .hexhead").textContent); t++) await new Promise(r => setTimeout(r, 100));
+    const h = hexView.h, lines = document.querySelector("#content-hex pre").textContent.split("\\n").filter(Boolean).length;
+    const copy = COPY["content-hex"]();
+    return JSON.stringify({ i, btn: true, asked, len: h.head.length, want: Math.min(asked, size.get(key(h))),
+      prefix: old.every((x, k) => h.head[k] === x), whole: /\(whole entry\)/.test(document.querySelector("#content-hex .hexhead").textContent), wholeWant: size.get(key(h)) <= asked,
+      firstWhole: firstWhole,
+      lines, linesWant: Math.ceil(h.head.length / 16), copyBytes: copy.includes("bytes\\t" + h.head.length), err: document.querySelector("#content-hex .hexhead").textContent.match(/could not[^\\n]*/)?.[0] ?? null });
+  })()`));
+  if (!more.skip && more.btn && more.len === more.asked && !more.whole) {
+    const two = JSON.parse(await evalJs(`(async()=>{
+      const btn = document.querySelector("#hex-more"); if (!btn) return JSON.stringify({ btn: false });
+      const asked = Number(btn.dataset.n), before = hexView.h; btn.click();
+      for (let t = 0; t < 600 && hexView.h === before && !/could not/.test(document.querySelector("#content-hex .hexhead").textContent); t++) await new Promise(r => setTimeout(r, 100));
+      return JSON.stringify({ btn: true, asked, len: hexView.h.head.length, prefix: before.head.every((x, k) => hexView.h.head[k] === x),
+        last: !document.querySelector("#hex-more") });
+    })()`));
+    more.second = two;
+    if (!two.btn || !two.prefix || two.len > two.asked || two.len <= more.len || (two.len === two.asked && !two.last)) fail("hex show-more step 2: " + JSON.stringify(two));
+  }
+  console.log("hex more:", JSON.stringify(more));
+  if (!more.skip) {
+    if (!more.btn) fail("hex view: no show-more on a head cut at headBytes");
+    else if (more.err || more.len !== more.want || !more.prefix || more.whole !== more.wholeWant || more.firstWhole || more.lines !== more.linesWant || !more.copyBytes)
+      fail("hex show-more: " + JSON.stringify(more));
+  }
   // Extract tab: plan rows, then "extract all" → capture the zip blob instead of downloading
   // it and check it HERE in node, hashes by node:crypto (independent of the page's md5): apkllm
   // naming — every file is {md5}.bin of its content ({md5}.{sha256}.bin on a collision), the
@@ -142,8 +199,8 @@ try {
   // directory or a recorded reader rejection; the four-reader rule holds.
   if (gateOpened) {
     const xs = JSON.parse(await evalJs(`(async()=>{
-      document.querySelector('[data-tab="extract"]').click();
-      const rows = document.querySelectorAll("#extract-table tbody tr").length;
+      document.querySelector('[data-tab="container"]').click();
+      const rows = document.querySelectorAll("#entries-table tbody tr").length;
       const plan = report.gate.extract;
       let blob = null; const orig = window.saveBlob; window.saveBlob = (b, n) => { blob = b; window.__xname = n; };
       document.querySelector("#x-all").click();
@@ -227,13 +284,13 @@ try {
   // gate "bytes" button resolves names by index (a CR name survives).
   if (gateOpened) {
     const dc = JSON.parse(await evalJs(`(async()=>{
-      document.querySelector('[data-tab="extract"]').click();
-      $("#extract-filter").value = ""; xReaderOn = new Set(READER_ORDER); renderExtract();
+      document.querySelector('[data-tab="container"]').click();
+      $("#entries-filter").value = ""; xReaderOn = new Set(READER_ORDER); gateClassOn = new Set(CLASS_ORDER); contentCatOn = report.content.ok ? new Set(Object.keys(report.content.summary.by_category)) : new Set(); renderEntriesTable();
       const plan = report.gate.extract.entries, saved = [];
       const orig = window.saveBlob; window.saveBlob = (b, n) => saved.push({ b, n });
       window.__alerts = []; window.alert = (m) => window.__alerts.push(String(m));   // a modal would hang CDP
       const settle = async () => { for (let t = 0; t < 100 && extracting.size; t++) await new Promise(r => setTimeout(r, 50)); await new Promise(r => setTimeout(r, 30)); };
-      const dbl = async (i) => { const tr = document.querySelector('#extract-table tbody tr[data-i="' + i + '"]');
+      const dbl = async (i) => { const tr = document.querySelector('#entries-table tbody tr[data-i="' + i + '"]');
         tr.querySelector("td.name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); await new Promise(r => setTimeout(r, 10)); await settle(); };
       const same = (a, b) => a.length === b.length && a.every((x, k) => x === b[k]);
       // the single download is {md5}.zip = {md5}.bin + {md5}.json (STORED)
@@ -257,15 +314,13 @@ try {
       if (badI >= 0) { const n = saved.length; await dbl(badI); out.rejectedNoDownload = saved.length === n; out.rejectedStatus = $("#x-status").textContent; out.rejectedName = plan[badI].name; }
       const crI = report.gate.entries.findIndex(e => e.name.includes("\\r"));
       if (crI >= 0) {
-        document.querySelector('[data-tab="gate"]').click();
-        $("#gate-filter").value = ""; gateClassOn = new Set(CLASS_ORDER); renderGate();
-        const b = document.querySelector('#gate-table button[data-i="' + crI + '"]'); const n = saved.length;
+        const b = document.querySelector('#entries-table button[data-i="' + crI + '"]'); const n = saved.length;
         b.click(); await new Promise(r => setTimeout(r, 10)); await settle();
         out.crBytes = saved.length === n + 1;
-        document.querySelector('[data-tab="extract"]').click();
+        document.querySelector('[data-tab="container"]').click();
       }
       // a result that lands after another APK was loaded is dropped (no stale download / status)
-      if (okI >= 0) { const n = saved.length; const tr = document.querySelector('#extract-table tbody tr[data-i="' + okI + '"]');
+      if (okI >= 0) { const n = saved.length; const tr = document.querySelector('#entries-table tbody tr[data-i="' + okI + '"]');
         tr.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); loadGen++; await settle(); loadGen--;
         out.staleDropped = saved.length === n; }
       out.found = { okI, badI, crI }; out.alerts = window.__alerts;
@@ -283,19 +338,19 @@ try {
     };
     if (dc.found?.okI >= 0) {
       await evalJs(`window.__copied = []; Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t) => { window.__copied.push(t); } } }); window.__n0 = window.__saved.length; true`);
-      await realDbl(`#extract-table tbody tr[data-i="${dc.found.okI}"] .copyable`);
+      await realDbl(`#entries-table tbody tr[data-i="${dc.found.okI}"] .copyable`);
       const a = JSON.parse(await evalJs(`JSON.stringify({ dl: window.__saved.length - window.__n0, copied: window.__copied.length })`));
       dc.realName = a; if (a.dl !== 1 || a.copied !== 0) fail("real double-click on a name: " + JSON.stringify(a));
       await evalJs(`window.__n0 = window.__saved.length; true`);
-      await realDbl(`#extract-table tbody tr[data-i="${dc.found.okI}"] button[data-i]`);
+      await realDbl(`#entries-table tbody tr[data-i="${dc.found.okI}"] button[data-i]`);
       const b = JSON.parse(await evalJs(`JSON.stringify({ dl: window.__saved.length - window.__n0 })`));
       dc.realBytes = b; if (b.dl !== 1) fail("real double-click on bytes downloaded " + b.dl + " times");
       // a real SINGLE click on an Extract name still copies it (after the double-click window)
-      const r1 = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector('#extract-table tbody tr[data-i="${dc.found.okI}"] .copyable'); const b = el.getClientRects()[0]; window.__copied = []; window.__n0 = window.__saved.length; return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
+      const r1 = JSON.parse(await evalJs(`(()=>{ const el = document.querySelector('#entries-table tbody tr[data-i="${dc.found.okI}"] .copyable'); el.scrollIntoView({ block: "center", inline: "nearest" }); const b = el.getClientRects()[0]; window.__copied = []; window.__n0 = window.__saved.length; return JSON.stringify({ x: b.x + Math.min(8, b.width / 2), y: b.y + b.height / 2 }); })()`));
       for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, x: r1.x, y: r1.y, button: "left", clickCount: 1 });
       const c = JSON.parse(await evalJs(`(async()=>{ await new Promise(r => setTimeout(r, 500)); return JSON.stringify({ copied: window.__copied, dl: window.__saved.length - window.__n0, want: report.gate.extract.entries[${dc.found.okI}].name }); })()`));
       dc.realClick = { copied: c.copied.length, dl: c.dl };
-      if (c.copied.length !== 1 || c.copied[0] !== c.want || c.dl !== 0) fail("real single click on an Extract name: " + JSON.stringify(c));
+      if (c.copied.length !== 1 || c.copied[0] !== c.want || c.dl !== 0) fail("real single click on an entry name: " + JSON.stringify(c));
     }
     console.log("real mouse:", JSON.stringify({ name: dc.realName, bytes: dc.realBytes, click: dc.realClick }));
     await evalJs(`window.saveBlob = (b, n) => {}; true`);
@@ -332,19 +387,18 @@ try {
     // click-to-copy on every hostile name present, compared against the report data
     const hostile = /[\\t\\n\\r"]|^[=+@-]/;
     const clicks = [];
-    for (const el of document.querySelectorAll("#gate-table .copyable, #tamper-table .copyable")) {
+    for (const el of document.querySelectorAll("#entries-table .copyable, #tamper-table .copyable")) {
       const src = el.dataset.src, i = Number(el.dataset.i);
-      const want = src === "gate" ? report.gate.entries[i].name : report.tamper.entries[i].name;
+      const want = src === "entry" ? report.gate.entries[i].name : report.tamper.entries[i].name;
       if (!hostile.test(want)) continue;
-      const n = got.length; el.click(); await new Promise(r => setTimeout(r, 30));
+      const n = got.length; el.click(); await new Promise(r => setTimeout(r, src === "entry" ? 400 : 30));  // entries: copy waits out the dblclick window
       clicks.push({ want, ok: got.length > n && got[got.length - 1] === want });
     }
-    const gateTsv = out["gate-entries"] || "";
+    const gateTsv = out["entries"] || "";
     return JSON.stringify({ keys: Object.keys(out), nulls: Object.entries(out).filter(([k, v]) => v === null).map(([k]) => k),
       noHeader: Object.entries(out).filter(([k, v]) => v !== null && !v.startsWith("# apkllm-web")).map(([k]) => k),
-      gate: shape("gate-entries"), extract: shape("extract-entries"), content: shape("content-entries"), tamper: shape("tamper-entries"),
-      gateN: report.gate.ok ? report.gate.entries.length : null, extractN: report.gate.ok ? report.gate.extract.entries.length : null,
-      contentN: report.content.ok ? report.content.entries.length : null, tamperN: report.tamper.ok ? report.tamper.entries.length : null,
+      entries: shape("entries"), tamper: shape("tamper-entries"),
+      entriesN: report.gate.ok ? report.gate.entries.length : null, tamperN: report.tamper.ok ? report.tamper.entries.length : null,
       hostileNames: report.gate.ok ? report.gate.entries.filter(e => hostile.test(e.name)).length : 0,
       escapedTab: gateTsv.includes("assets/tab\\\\there\\\\nnewline.txt"), escapedCr: gateTsv.includes("assets/cr\\\\rname.txt"),
       quoted: gateTsv.includes('\\t\\\\"lead.txt\\t'), formula: gateTsv.includes("\\t'=HYPERLINK(1)\\t"), clicks });
@@ -353,7 +407,7 @@ try {
   if (cp.keys.length < 14) fail(`only ${cp.keys.length} copy buttons`);
   if (cp.nulls.length) fail("copy buttons that copied nothing: " + cp.nulls.join(", "));
   if (cp.noHeader.length) fail("copy text without header: " + cp.noHeader.join(", "));
-  for (const [k, n] of [["gate", cp.gateN], ["extract", cp.extractN], ["content", cp.contentN], ["tamper", cp.tamperN]])
+  for (const [k, n] of [["entries", cp.entriesN], ["tamper", cp.tamperN]])
     if (n !== null && (!cp[k] || cp[k].rows !== n || !cp[k].uniform)) fail(`${k} TSV ${JSON.stringify(cp[k])} for ${n} entries`);
   if (cp.hostileNames && base === "readers" && !(cp.escapedTab && cp.escapedCr && cp.quoted && cp.formula)) fail("hostile names not escaped in the TSV: " + JSON.stringify(cp));
   if (base === "readers" && cp.hostileNames < 4) fail("readers.apk lost its hostile-name fixtures");
@@ -365,25 +419,29 @@ try {
     content: !!(report.content.ok && report.content.checks?.length), tamper: !!(report.tamper.ok && report.tamper.checks?.length),
     tables: { gate: report.gate.ok, extract: !!(report.gate.ok && report.gate.extract?.ok), content: report.content.ok, tamper: report.tamper.ok },
     findings: report.tamper.ok ? report.tamper.findings.length : 0 })`));
-  for (const tab of ["gate", "extract", "content", "tamper"]) {
-    await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
-    const boxes = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll("#panel-${tab} ul.checks, #panel-${tab} #tamper-findings, #panel-${tab} .tablewrap")].map(b => ({ id: b.id || b.querySelector("table")?.id, cls: b.classList.contains("scrollbox"), oy: getComputedStyle(b).overflowY, shown: !!b.offsetParent, h: b.clientHeight, sh: b.scrollHeight,
+  // the four views' checks lists and the two entry tables share the Container tab
+  await evalJs(`document.querySelector('[data-tab="container"]').click(); true`);
+  {
+    const boxes = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll("#panel-container ul.checks, #panel-container #tamper-findings, #panel-container .tablewrap")].map(b => ({ id: b.id || b.querySelector("table")?.id, cls: b.classList.contains("scrollbox"), oy: getComputedStyle(b).overflowY, shown: !!b.offsetParent, h: b.clientHeight, sh: b.scrollHeight,
       cap: b.classList.contains("scrolltable") ? Math.min(640, innerHeight * 0.65) : Math.min(420, innerHeight * 0.45) })))`));
-    if (!boxes.some(b => b.id === tab + "-checks")) fail(`no checks list on the ${tab} tab`);
     for (const b of boxes) {
       if (!b.cls || b.oy !== "auto") fail(`${b.id} is not a scrolling box (${b.cls ? "" : "no .scrollbox, "}overflow-y ${b.oy})`);
       if (b.h > b.cap + 1) fail(`${b.id} is ${b.h}px tall, over its ${Math.round(b.cap)}px box`);
     }
-    if (want[tab] && !boxes.some(b => b.shown && b.id.endsWith("checks"))) fail(`${tab} checks not shown although the report has them`);
-    if (!boxes.some(b => b.id === tab + "-table")) fail(`${tab} entry table is not a box`);
-    if (want.tables[tab] && !boxes.some(b => b.id === tab + "-table" && b.shown)) fail(`${tab} entry table not shown although the report has entries`);
-    if (!want.tables[tab] && boxes.some(b => b.id === tab + "-table" && b.shown)) fail(`${tab} entry table box shown although empty`);
+    for (const k of ["gate", "extract", "content", "tamper"]) {
+      if (!boxes.some(b => b.id === k + "-checks")) fail(`no ${k} checks list on the Container tab`);
+      if (want[k] && !boxes.some(b => b.shown && b.id === k + "-checks" && b.sh > 0)) fail(`${k} checks not shown although the report has them`);
+    }
+    for (const [k, has] of [["entries", want.tables.gate], ["tamper", want.tables.tamper]]) {
+      if (!boxes.some(b => b.id === k + "-table")) fail(`${k} entry table is not a box`);
+      if (has && !boxes.some(b => b.id === k + "-table" && b.shown)) fail(`${k} entry table not shown although the report has entries`);
+    }
     const tall = boxes.filter(b => b.sh > b.h + 1);
-    if (tall.length) console.log(`scrollbox ${tab}:`, tall.map(b => `${b.id} ${b.h}/${b.sh}px`).join(", "));
+    if (tall.length) console.log("scrollbox container:", tall.map(b => `${b.id} ${b.h}/${b.sh}px`).join(", "));
   }
   if (want.tamper && await evalJs(`report.tamper.entries.length`) > 40) {
     // a long entry table scrolls inside its box with the header row still visible at its top
-    const t = JSON.parse(await evalJs(`(() => { document.querySelector('[data-tab="tamper"]').click(); const w = document.querySelector("#tamper-table").parentElement; w.scrollTop = 600;
+    const t = JSON.parse(await evalJs(`(() => { document.querySelector('[data-tab="container"]').click(); const w = document.querySelector("#tamper-table").parentElement; w.scrollTop = 600;
       const th = w.querySelector("th").getBoundingClientRect().top, top = w.getBoundingClientRect().top; return JSON.stringify({ st: w.scrollTop, sh: w.scrollHeight, h: w.clientHeight, thOff: Math.round(th - top) }); })()`));
     if (!(t.sh > t.h && t.st > 0)) fail("a long entry table does not scroll inside its box: " + JSON.stringify(t));
     if (Math.abs(t.thOff) > 2) fail("entry table header did not stay at the box top: " + JSON.stringify(t));
@@ -391,22 +449,22 @@ try {
   if (want.findings > 20) {
     // the box scrolls, and once at its end the wheel moves the page on (no scroll trap)
     const r = JSON.parse(await evalJs(`(() => { const b = document.querySelector("#tamper-findings"); b.scrollIntoView({ block: "center" }); b.scrollTop = 1e9; const r = b.getBoundingClientRect();
-      return JSON.stringify({ st: b.scrollTop, sh: b.scrollHeight, h: b.clientHeight, x: r.left + r.width / 2, y: r.top + r.height / 2, panel: document.querySelector("#panel-tamper").scrollTop }); })()`));
+      return JSON.stringify({ st: b.scrollTop, sh: b.scrollHeight, h: b.clientHeight, x: r.left + r.width / 2, y: r.top + r.height / 2, panel: document.querySelector("#panel-container").scrollTop }); })()`));
     if (!(r.sh > r.h && r.st > 0)) fail("a long findings list does not scroll inside its box: " + JSON.stringify(r));
     for (let i = 0; i < 4; i++) { await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: r.x, y: r.y, deltaX: 0, deltaY: 300 }); await new Promise(res => setTimeout(res, 120)); }
-    const panelAfter = await evalJs(`document.querySelector("#panel-tamper").scrollTop`);
+    const panelAfter = await evalJs(`document.querySelector("#panel-container").scrollTop`);
     if (!(panelAfter > r.panel)) fail(`wheel at the end of the findings box did not move the page (${r.panel} → ${panelAfter})`);
   }
   // a new file starts every tab at its first row — also the tabs that were hidden during the
   // load (an offset set under display:none is ignored), so scroll boxes on two tabs, reload from a third
   {
     const scrolled = [];
-    for (const [tab, sel] of [["gate", "#gate-table"], ["tamper", "#tamper-table"], ["tamper", "#tamper-findings"]]) {
+    for (const [tab, sel] of [["container", "#entries-table"], ["container", "#tamper-table"], ["container", "#tamper-findings"]]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
       const st = await evalJs(`(() => { const e = document.querySelector("${sel}"); const b = e.classList.contains("scrollbox") ? e : e.parentElement; b.scrollTop = 1e9; return b.scrollTop; })()`);
       if (st > 0) scrolled.push([tab, sel]);
     }
-    await evalJs(`document.querySelector('[data-tab="content"]').click(); true`);
+    await evalJs(`document.querySelector('[data-tab="signing"]').click(); true`);
     if (scrolled.length) {
       const { result: { root: r3 } } = await S("DOM.getDocument");
       const { result: { nodeId: n3 } } = await S("DOM.querySelector", { nodeId: r3.nodeId, selector: "#file" });
@@ -622,8 +680,11 @@ try {
       if (!j || j.not_device_view !== true || j.entries?.[0]?.name !== lf.got.entry || j.entries[0].sha256 !== (d && sha256(d))) fail("LFH chain download JSON wrong: " + JSON.stringify(j)?.slice(0, 200));
     }
   }
-  if (SHOT) {   // SHOT = the Tamper scan tab; "-extract" / "-images" / "-signing" before .png = that tab
-    for (const [tab, file] of [["tamper", SHOT], ["extract", SHOT.replace(/(\.png)?$/, "-extract.png")], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")], ...(lfh0.applies ? [["lfh", SHOT.replace(/(\.png)?$/, "-lfh.png")]] : [])]) {
+  if (SHOT) {   // SHOT = the Container tab; "-entries" its entry table; "-images" / "-signing" / "-lfh" before .png = that tab
+    await evalJs(`(async () => { document.querySelector('[data-tab="container"]').click(); document.querySelector("#entries-table tbody tr")?.click(); await new Promise(r => requestAnimationFrame(() => setTimeout(r, 400))); document.querySelector("#entries-table").closest(".card").scrollIntoView({ block: "start" }); return true; })()`);
+    { const { result: { data } } = await S("Page.captureScreenshot", { format: "png" }); const f = SHOT.replace(/(\.png)?$/, "-entries.png"); writeFileSync(f, Buffer.from(data, "base64")); console.log("screenshot:", f); }
+    await evalJs(`document.querySelector("#panel-container").scrollTop = 0; true`);
+    for (const [tab, file] of [["container", SHOT], ["images", SHOT.replace(/(\.png)?$/, "-images.png")], ["signing", SHOT.replace(/(\.png)?$/, "-signing.png")], ...(lfh0.applies ? [["lfh", SHOT.replace(/(\.png)?$/, "-lfh.png")]] : [])]) {
       await evalJs(`document.querySelector('[data-tab="${tab}"]').click(); true`);
       const { result: { data } } = await S("Page.captureScreenshot", { format: "png" });
       writeFileSync(file, Buffer.from(data, "base64")); console.log("screenshot:", file);

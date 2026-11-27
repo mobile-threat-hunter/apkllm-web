@@ -9,7 +9,7 @@
 // Protocol (postMessage; each call carries an opaque `id` the worker echoes):
 //   main → worker: { id, type: "init",    buildSha: string }
 //                  { id, type: "load",    bytes: Uint8Array }
-//                      → { tamper, signing, traces, certs, frosting, content, lfh, input: {md5, sha256, size} }
+//                      → { tamper, signing, traces, certs, frosting, content, lfh, input: {md5, sha256, size}, headBytes }
 //                        (the manifest-independent reads; lfh = the LFH chain (apkllm #98) only when
 //                        libziparchive itself refused the file — `open_error` — else null)
 //                  { id, type: "gate",    extractNativeLibs: bool|null, targetSdk: number|null, pageSize: number,
@@ -19,6 +19,9 @@
 //                      (result.extract = extract_report: the four-reader decompression plan)
 //                  { id, type: "extract", name: string, name_hex: string|null }
 //                      → extractEntry(...) with .data transferred
+//                  { id, type: "head",    name: string, name_hex: string|null, n: number (≤ 1 MiB) }
+//                      → { ok, name, disposition, complete, uncompressed_size, error, head } — the hex view's longer
+//                        head: entryHeads over that one name, .head transferred
 //                  { id, type: "bundle",  indices: number[] (into the gate's entries), source: {name,size}, params: <gate params> }
 //                      → { blob, counts, total, input_md5 }  — every named entry through
 //                        extractEntry (its OWN mapped reader), packed into a STORED zip
@@ -116,13 +119,13 @@ async function load(bytes) {
     content.heads = content.entries.map((e, i) => {
       const h = heads.ok ? heads.entries[i] : undefined;
       return h && h.name === e.name && h.name_hex === e.name_hex
-        ? { name: h.name, disposition: h.disposition, complete: h.complete, head: h.head } : null;
+        ? { name: h.name, disposition: h.disposition, complete: h.complete, uncompressed_size: h.uncompressed_size, error: h.error ?? null, head: h.head } : null;
     });
   }
   // apkllm #98 / #100: when libziparchive itself refuses the file (`open_error`, never the message
   // text), the Local File Header chain is what a sequential reader finds — the engine's walk whole
   LFH = content.open_error || traces.open_error ? Module.lfhChain(VFS) : null;
-  return { tamper, signing, traces, certs, frosting, content, lfh: LFH, input: INPUT };
+  return { tamper, signing, traces, certs, frosting, content, lfh: LFH, input: INPUT, headBytes: D.HEAD_BYTES };
 }
 
 function gate(p) {
@@ -154,6 +157,20 @@ function nameKey(name, nameHex) {
 function extract(name, nameHex) {
   if (!loaded) throw new Error("no APK loaded");
   return Module.extractEntry(VFS, nameKey(name, nameHex), MAX_ENTRY);
+}
+
+// More of ONE entry's head for the hex view: the same entryHeads read the load ran (its own device
+// reader, stopped early), with a larger n and the walk restricted to that exact name — one row:
+// libziparchive refuses to open an archive that lists a name twice (zip_cd_entry_map, kDuplicateEntry).
+const HEAD_MAX = 1024 * 1024;   // the hex view's ceiling (65 536 dump lines)
+function head(name, nameHex, n) {
+  if (!loaded) throw new Error("no APK loaded");
+  if (!(Number.isInteger(n) && n > 0 && n <= HEAD_MAX)) throw new Error("head: n must be 1.." + HEAD_MAX);
+  const r = Module.entryHeads(VFS, n, [nameKey(name, nameHex)]);
+  if (!r.ok) return { ok: false, error: r.error };
+  const h = r.entries.find(x => x.name === name && (x.name_hex ?? null) === (nameHex ?? null));
+  if (!h) return { ok: false, error: "entry not found in the walk" };
+  return { ok: true, name: h.name, disposition: h.disposition, complete: h.complete, uncompressed_size: h.uncompressed_size, error: h.error ?? null, head: h.head };
 }
 
 // ── bulk extraction → one zip ───────────────────────────────────────────
@@ -523,6 +540,10 @@ async function handle(e, cancelAt) {
     else if (type === "extract") {
       result = extract(e.data.name, e.data.name_hex);
       if (result.ok && result.data) transfer = [result.data.buffer];
+    }
+    else if (type === "head") {
+      result = head(e.data.name, e.data.name_hex, e.data.n);
+      if (result.ok) transfer = [result.head.buffer];
     }
     else if (type === "single") result = await single(e.data);
     else if (type === "lfhSingle") result = await lfhSingle(e.data, cancelAt);
