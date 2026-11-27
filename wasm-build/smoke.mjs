@@ -105,6 +105,19 @@ for (const path of TESTS) {
       if (magic !== "dex\n") fail(`dex head magic ${JSON.stringify(magic)}`);
       if (!(dexHead.head instanceof Uint8Array)) fail("head is not a Uint8Array");
     }
+    // the hex view's longer head (worker `head`): the same entry through a one-name filter — as a
+    // string, or as raw bytes for a lossy name — is the same read stopped later (a prefix of it)
+    const raw = (h) => h.name_hex ? Uint8Array.from(h.name_hex.match(/../g), x => parseInt(x, 16)) : h.name;
+    for (const h of [heads.entries.find(e => e.name_hex), heads.entries.find(e => !e.name_hex && e.disposition !== "rejected")].filter(Boolean)) {
+      const more = m.entryHeads(VFS, 64 * 1024, [raw(h)]);
+      const same = more.ok ? more.entries.filter(x => x.name === h.name && x.name_hex === h.name_hex) : [];
+      if (!same.length) { fail(`entryHeads one-name filter missed ${JSON.stringify(h.name)} (raw=${!!h.name_hex})`); continue; }
+      const long = same[0].head;
+      if (long.length < h.head.length || h.head.some((x, k) => long[k] !== x)) fail(`longer head of ${JSON.stringify(h.name)} does not extend its head`);
+      // n really reaches the filtered read: an entry past the short head yields more of it
+      if (h.head.length === 8 && h.uncompressed_size > 8 && h.disposition !== "error" && long.length <= 8) fail(`longer head of ${JSON.stringify(h.name)} stayed at ${long.length} bytes`);
+      if (same[0].disposition !== h.disposition) fail(`longer head of ${JSON.stringify(h.name)}: disposition ${same[0].disposition} != ${h.disposition}`);
+    }
   }
 
   if (gate.ok) {

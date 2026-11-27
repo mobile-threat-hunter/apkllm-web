@@ -13,7 +13,7 @@
      was built from and -N counts bumps against it. Defined ONCE here; every other
      ?v= site derives from it (dexllm-web lesson: hand-synced pins drifted). -->
 <script>
-window.__APKLLM_BUILD = "1cb0782-2";
+window.__APKLLM_BUILD = "1cb0782-3";
 {
   const l = document.createElement("link");
   l.rel = "preload"; l.as = "fetch"; l.crossOrigin = "anonymous";
@@ -219,13 +219,14 @@ window.__APKLLM_BUILD = "1cb0782-2";
   .card > h2 { display:flex; align-items:baseline; gap:6px; }
   .card > h2 .tiny { text-transform:none; letter-spacing:0.01em; margin-left:6px; font-weight:500; }
   /* dexllm-web's "⧉ copy" — copies the card's whole dataset as tab-separated text */
-  button.copybtn {
+  button.copybtn, button.morebtn {
     margin-left:auto; flex:none; align-self:center; padding:3px 10px; border-radius:6px; cursor:pointer; user-select:none; white-space:nowrap;
     border:1px solid var(--line-3); color:var(--fg-3); background:var(--bg-1); box-shadow:none;
     font:600 10.5px/1.4 var(--f-ui); letter-spacing:0.02em; text-transform:none;
     transition:background 0.15s, color 0.15s, border-color 0.15s;
   }
-  button.copybtn:hover:not(:disabled) { color:var(--fg); border-color:rgba(107,161,255,0.5); background:rgba(107,161,255,0.1); box-shadow:none; }
+  button.morebtn { margin-left:0; }
+  button.copybtn:hover:not(:disabled), button.morebtn:hover:not(:disabled) { color:var(--fg); border-color:rgba(107,161,255,0.5); background:rgba(107,161,255,0.1); box-shadow:none; }
   button.copybtn.copied { color:var(--good); border-color:var(--good); background:rgba(95,220,160,0.12); }
   button.copybtn.copyfail { color:var(--warn); border-color:rgba(245,180,65,0.5); background:rgba(245,180,65,0.10); }
   /* single items (entry names, finding entries) copy on click — dexllm-web's IoC pills */
@@ -234,6 +235,14 @@ window.__APKLLM_BUILD = "1cb0782-2";
   .copyable.copied { box-shadow:inset 0 0 0 1px var(--brand), 0 0 0 3px var(--brand-soft); }
   .copyable.copyfail { box-shadow:inset 0 0 0 1px var(--warn); }
   .hexhead { display:flex; align-items:center; gap:10px; margin-top:10px; }
+  /* the Container tab: four summary cards side by side where the window allows */
+  .cardgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(440px, 1fr)); gap:0 14px; }
+  .card > h3 { display:flex; align-items:baseline; gap:6px; margin:14px 0 8px; font:600 11px/1.4 var(--f-ui); color:var(--fg-2); letter-spacing:0.04em; text-transform:uppercase; }
+  .card > h3:first-of-type { margin-top:0; }
+  .chiprows { row-gap:6px; }
+  .chiplabel { color:var(--fg-3); font:600 10.5px/1.4 var(--f-ui); text-transform:uppercase; letter-spacing:0.04em; margin-left:6px; }
+  .chiplabel:first-child { margin-left:0; }
+  @media (max-width:960px) { .cardgrid { grid-template-columns:1fr; } }
   .card p.note { color:var(--fg-3); font:11.5px/1.55 var(--f-ui); margin:10px 0 0; }
   .card p.note b { color:var(--fg-2); }
   .kv { display:grid; grid-template-columns:max-content 1fr; gap:5px 18px; font-size:12px; }
@@ -287,8 +296,8 @@ window.__APKLLM_BUILD = "1cb0782-2";
   /* hover tints only unflagged rows — a fail/cond/flag/sel highlight never drops under the pointer */
   tbody tr:not(.fail):not(.cond):not(.flag):not(.sel):hover td { background:rgba(255,255,255,0.025); }
   td.name { white-space:normal; word-break:break-all; max-width:420px; color:var(--fg); }
-  #extract-table td.name { min-width:220px; }
-  #extract-table tbody tr.busy td { opacity:0.55; }
+  #entries-table td.name { min-width:220px; }
+  #entries-table tbody tr.busy td { opacity:0.55; }
   /* one line, never wraps: a status that grew a line would shift the table between the two
      clicks of a double-click (the 2nd click then lands on another row / button) */
   #x-status { flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -301,7 +310,7 @@ window.__APKLLM_BUILD = "1cb0782-2";
   tr.cond td:first-child, tr.flag td:first-child { box-shadow:inset 2px 0 0 rgba(245,180,65,0.6); }
   tr.sel td { background:var(--hl); }
   tr.sel td:first-child { box-shadow:inset 2px 0 0 var(--brand); }
-  #content-table tbody tr { cursor:pointer; }
+  #entries-table tbody tr { cursor:pointer; }
   td.diff { color:var(--bad); font-weight:600; }
   td.dim { color:var(--fg-3); }
   .tiny { font:11px var(--f-ui); color:var(--fg-3); }
@@ -364,17 +373,14 @@ window.__APKLLM_BUILD = "1cb0782-2";
     <button id="another">load another</button>
   </div>
   <div id="tabs">
-    <div class="tab on" data-tab="gate">Install gate<span class="n" id="n-gate"></span></div>
-    <div class="tab" data-tab="extract">Extract<span class="n" id="n-extract"></span></div>
-    <div class="tab" data-tab="content">Content<span class="n" id="n-content"></span></div>
+    <div class="tab on" data-tab="container">Container<span class="n" id="n-container"></span></div>
     <div class="tab" data-tab="images">Images<span class="n" id="n-images"></span></div>
-    <div class="tab" data-tab="tamper">Tamper scan<span class="n" id="n-tamper"></span></div>
     <div class="tab" data-tab="signing">Signing<span class="n" id="n-signing"></span></div>
     <div class="tab off" data-tab="lfh" id="tab-lfh">LFH chain<span class="n" id="n-lfh"></span></div>
   </div>
 
-  <!-- ── Install gate ─────────────────────────────────────────────── -->
-  <section class="panel on" id="panel-gate">
+  <!-- ── Container: install gate · decompression plan · content · tamper scan, one entry table ── -->
+  <section class="panel on" id="panel-container">
     <div class="card">
       <h2>Manifest inputs</h2>
       <div class="form">
@@ -401,44 +407,53 @@ window.__APKLLM_BUILD = "1cb0782-2";
         </label>
       </div>
       <p class="err" id="in-err"></p>
-      <p class="note">apkllm never parses the manifest (that is axmlllm's job in MMH). In MMH these values arrive from axmlllm; here you supply them. Unknown ⇒ the verdict stays an honest tri-state — nothing is guessed. The split facts decide whether this APK is in the base AssetManager (the only one the resources.arsc gate inspects); for a split, extractNativeLibs / targetSdk are the BASE's. <b>base (assumed)</b> is apkllm's one documented default — setting a split fact while it stays assumed makes the role unknown.</p>
+      <p class="note">apkllm never parses the manifest (that is axmlllm's job in MMH). In MMH these values arrive from axmlllm; here you supply them. Unknown ⇒ the verdict stays an honest tri-state — nothing is guessed. These inputs drive the install verdict and the decompression plan below. The split facts decide whether this APK is in the base AssetManager (the only one the resources.arsc gate inspects); for a split, extractNativeLibs / targetSdk are the BASE's. <b>base (assumed)</b> is apkllm's one documented default — setting a split fact while it stays assumed makes the role unknown.</p>
     </div>
-    <div class="card">
-      <h2>Container verdict<button class="copybtn" type="button" data-copy="gate-verdict" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div id="gate-verdict"></div>
-    </div>
-    <div class="card">
-      <h2>Checks<button class="copybtn" type="button" data-copy="gate-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks scrollbox" id="gate-checks" tabindex="0" role="region" aria-label="Install gate checks"></ul>
-    </div>
-    <div class="card">
-      <h2>Entries <span class="tiny">(every entry libziparchive enumerates — failing gates are highlighted, never hidden)</span><button class="copybtn" type="button" data-copy="gate-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div class="toolbar">
-        <input type="search" id="gate-filter" placeholder="filter by name…">
-        <span id="gate-chips"></span>
-        <span class="count" id="gate-count"></span>
+    <div class="cardgrid">
+      <div class="card">
+        <h2>Install verdict <span class="tiny">(container gate)</span><button class="copybtn" type="button" data-copy="gate-verdict" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+        <div id="gate-verdict"></div>
       </div>
-      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Install gate entries"><table id="gate-table"></table></div>
+      <div class="card">
+        <h2>Decompression plan <span class="tiny">(four-reader model)</span><button class="copybtn" type="button" data-copy="extract-plan" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+        <div id="extract-summary"></div>
+        <p class="note">Bytes are materialized only by the entry's own mapped reader: method 8 → libziparchive inflate, 0 → stored copy; a forged method ∉ {0,8} is read raw only by the lenient <b>AssetManager</b> (manifest / resources), while the strict readers — <b>ART.DexFileLoader</b>, <b>NativeLibraryHelper</b>, generic <b>libziparchive</b> — reject it, so there is no faithful extraction and the entry is reported, not re-read with another reader's algorithm. The manifest inputs above drive the plan.</p>
+      </div>
+      <div class="card">
+        <h2>Content <span class="tiny">(first 512 device-produced bytes, typed by magic — the bytes' claim, never the name)</span><button class="copybtn" type="button" data-copy="content-summary" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+        <div id="content-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Present vs consumed <span class="tiny">(tamper scan)</span><button class="copybtn" type="button" data-copy="tamper-head" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+        <div id="tamper-head"></div>
+      </div>
     </div>
-  </section>
-
-  <!-- ── Extract ──────────────────────────────────────────────────── -->
-  <section class="panel" id="panel-extract">
     <div class="card">
-      <h2>Decompression plan <span class="tiny">(four-reader model — which device reader consumes each entry, and how)</span><button class="copybtn" type="button" data-copy="extract-plan" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div id="extract-summary"></div>
-      <p class="note">Bytes are materialized only by the entry's own mapped reader: method 8 → libziparchive inflate, 0 → stored copy; a forged method ∉ {0,8} is read raw only by the lenient <b>AssetManager</b> (manifest / resources), while the strict readers — <b>ART.DexFileLoader</b>, <b>NativeLibraryHelper</b>, generic <b>libziparchive</b> — reject it, so there is no faithful extraction and the entry is reported, not re-read with another reader's algorithm. The manifest inputs on the Install gate tab drive the plan.</p>
+      <h2>Checks</h2>
+      <h3>Install gate<button class="copybtn" type="button" data-copy="gate-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h3>
+      <ul class="checks scrollbox" id="gate-checks" tabindex="0" role="region" aria-label="Install gate checks"></ul>
+      <h3>Decompression plan<button class="copybtn" type="button" data-copy="extract-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h3>
+      <ul class="checks scrollbox" id="extract-checks" tabindex="0" role="region" aria-label="Decompression plan checks"></ul>
+      <h3>Content<button class="copybtn" type="button" data-copy="content-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h3>
+      <ul class="checks scrollbox" id="content-checks" tabindex="0" role="region" aria-label="Content checks"></ul>
+      <h3>Tamper scan<button class="copybtn" type="button" data-copy="tamper-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h3>
+      <ul class="checks scrollbox" id="tamper-checks" tabindex="0" role="region" aria-label="Tamper scan checks"></ul>
     </div>
     <div class="card">
-      <h2>Checks<button class="copybtn" type="button" data-copy="extract-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks scrollbox" id="extract-checks" tabindex="0" role="region" aria-label="Extract checks"></ul>
+      <h2>Findings <span class="tiny">(tamper scan)</span><button class="copybtn" type="button" data-copy="tamper-findings" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div class="scrollbox" id="tamper-findings" tabindex="0" role="region" aria-label="Tamper findings"></div>
     </div>
     <div class="card">
-      <h2>Entries <span class="tiny">(every entry, rejected ones included — select and extract, or double-click a row to download it)</span><button class="copybtn" type="button" data-copy="extract-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <h2>Entries <span class="tiny">(every entry libziparchive enumerates, one row each: its install gate, its reader, its content — failing ones highlighted, never hidden. Click a row for its bytes in hex, double-click to download them)</span><button class="copybtn" type="button" data-copy="entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
       <div class="toolbar">
-        <input type="search" id="extract-filter" placeholder="filter by name…">
-        <span id="extract-chips"></span>
-        <span class="count" id="extract-count"></span>
+        <input type="search" id="entries-filter" placeholder="filter by name…">
+        <span class="count" id="entries-count"></span>
+        <button class="morebtn" type="button" id="hex-jump" style="display:none" title="Scroll to the selected row's hex dump below the table">↓ hex</button>
+      </div>
+      <div class="toolbar chiprows">
+        <span class="chiplabel">class</span><span id="gate-chips"></span>
+        <span class="chiplabel">reader</span><span id="extract-chips"></span>
+        <span class="chiplabel">content</span><span id="content-chips"></span>
       </div>
       <div class="toolbar">
         <button id="x-sel-shown">select shown</button>
@@ -448,29 +463,16 @@ window.__APKLLM_BUILD = "1cb0782-2";
         <button id="x-cancel" style="display:none">cancel</button>
         <span class="count" id="x-status"></span>
       </div>
-      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Extract entries"><table id="extract-table"></table></div>
-    </div>
-  </section>
-
-  <!-- ── Content ──────────────────────────────────────────────────── -->
-  <section class="panel" id="panel-content">
-    <div class="card">
-      <h2>Summary <span class="tiny">(first 512 device-produced bytes of each entry, typed by magic — the bytes' claim, never the name)</span><button class="copybtn" type="button" data-copy="content-summary" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div id="content-summary"></div>
-    </div>
-    <div class="card">
-      <h2>Checks<button class="copybtn" type="button" data-copy="content-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks scrollbox" id="content-checks" tabindex="0" role="region" aria-label="Content checks"></ul>
-    </div>
-    <div class="card">
-      <h2>Entries<button class="copybtn" type="button" data-copy="content-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div class="toolbar">
-        <input type="search" id="content-filter" placeholder="filter by name…">
-        <span id="content-chips"></span>
-        <span class="count" id="content-count"></span>
-      </div>
-      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Content entries"><table id="content-table"></table></div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Entries"><table id="entries-table"></table></div>
       <div id="content-hex"></div>
+    </div>
+    <div class="card">
+      <h2>Raw walk <span class="tiny">(apkllm's own ZIP reader, not libziparchive — Central Directory vs Local File Header; a divergent LFH field is red)</span><button class="copybtn" type="button" data-copy="tamper-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
+      <div class="toolbar">
+        <input type="search" id="tamper-filter" placeholder="filter by name…">
+        <span class="count" id="tamper-count"></span>
+      </div>
+      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Raw walk entries"><table id="tamper-table"></table></div>
     </div>
   </section>
 
@@ -506,30 +508,6 @@ window.__APKLLM_BUILD = "1cb0782-2";
         <span class="tiny" id="lfh-status"></span>
       </div>
       <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="LFH chain entries"><table id="lfh-table"></table></div>
-    </div>
-  </section>
-
-  <!-- ── Tamper scan ──────────────────────────────────────────────── -->
-  <section class="panel" id="panel-tamper">
-    <div class="card">
-      <h2>Present vs consumed<button class="copybtn" type="button" data-copy="tamper-head" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div id="tamper-head"></div>
-    </div>
-    <div class="card">
-      <h2>Checks<button class="copybtn" type="button" data-copy="tamper-checks" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <ul class="checks scrollbox" id="tamper-checks" tabindex="0" role="region" aria-label="Tamper scan checks"></ul>
-    </div>
-    <div class="card">
-      <h2>Findings<button class="copybtn" type="button" data-copy="tamper-findings" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div class="scrollbox" id="tamper-findings" tabindex="0" role="region" aria-label="Tamper findings"></div>
-    </div>
-    <div class="card">
-      <h2>Raw walk <span class="tiny">(own ZIP reader, not libziparchive — Central Directory vs Local File Header; a divergent LFH field is red)</span><button class="copybtn" type="button" data-copy="tamper-entries" title="Copy this card as text (tab-separated rows)">⧉ copy</button></h2>
-      <div class="toolbar">
-        <input type="search" id="tamper-filter" placeholder="filter by name…">
-        <span class="count" id="tamper-count"></span>
-      </div>
-      <div class="tablewrap scrollbox scrolltable" tabindex="0" role="region" aria-label="Raw walk entries"><table id="tamper-table"></table></div>
     </div>
   </section>
 
@@ -620,7 +598,7 @@ async function loadFile(file) {
   gateClassOn = new Set(CLASS_ORDER);
   xReaderOn = null; xSel = new Set(); setXStatus("");
   stopImages();
-  for (const id of ["#gate-filter", "#extract-filter", "#content-filter", "#images-filter", "#tamper-filter", "#lfh-filter"]) $(id).value = "";
+  for (const id of ["#entries-filter", "#images-filter", "#tamper-filter", "#lfh-filter"]) $(id).value = "";
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (gen !== loadGen) return;
@@ -632,7 +610,7 @@ async function loadFile(file) {
     report = next; reportGen = gen;
     renderAll();
     // a file the device reader refuses opens on its LFH chain (the one view with entries); any
-    // other file never shows that tab, and a previous file's LFH tab gives way to the Install gate
+    // other file never shows that tab, and a previous file's LFH tab gives way to the Container tab
     // the tab shows whenever the walk was attempted (libziparchive's open_error) — an LFH walk that
     // itself failed shows its error there; it opens first only when it has entries (a non-ZIP drop
     // has none: no local header at offset 0). Switched after #app is shown: a scroll reset under
@@ -641,7 +619,7 @@ async function loadFile(file) {
     const lfhTab = $("#tab-lfh"), lfh = report.lfh;
     lfhTab.classList.toggle("off", !lfh);
     if (lfh && (!lfh.ok || lfh.entries_total > 0)) lfhTab.click();
-    else if (lfhTab.classList.contains("on")) document.querySelector('#tabs .tab[data-tab="gate"]').click();
+    else if (lfhTab.classList.contains("on")) document.querySelector('#tabs .tab[data-tab="container"]').click();
     resetPanelScroll(document.querySelector(".panel.on"));
     statusEl.innerHTML = "engine ready · <b>" + esc(file.name) + "</b>";
   } catch (e) {
@@ -700,13 +678,13 @@ async function rerunGate() {
   try {
     const g = await wcall({ type: "gate", ...gateParams() });
     if (gen !== loadGen || report !== cur) return;   // a newer load replaced the APK meanwhile
-    report.gate = g; renderGate(); renderExtract(); renderFilebar();
+    report.gate = g; renderGate(); renderExtract(); renderEntriesTable(); renderFilebar();
   } catch (e) { if (gen === loadGen) $("#gate-verdict").innerHTML = '<span class="err">' + esc(e.message) + "</span>"; }
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
 function renderAll() {
-  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderImages(); renderTamper(); renderSigning(); renderFrosting(); renderCerts(); renderTraces(); renderLfh(); }
+  renderFilebar(); renderGate(); renderExtract(); renderContent(); renderEntriesTable(); renderImages(); renderTamper(); renderSigning(); renderFrosting(); renderCerts(); renderTraces(); renderLfh(); }
 
 function renderChecks(el, checks) {
   el.innerHTML = (checks || []).map(c => `
@@ -737,23 +715,25 @@ function renderFilebar() {
   if (lfh && !lfh.ok) pills.push('<span class="pill bad" data-lfh>LFH chain unavailable</span>');
   if (lfh?.ok && lfh.applies) pills.push(`<span class="pill warn" data-lfh>LFH chain: ${lfh.entries_total} entr${lfh.entries_total === 1 ? "y" : "ies"} · ${lfh.deliverable_total} recoverable — not the device's view</span>`);
   $("#fpills").innerHTML = pills.join(" ");
-  // tab count badges (dexllm-web .dextab .n). The number is the entry count (tamper: finding
-  // count / "clean"; signing: pair count / "none"); the colour follows the SAME verdict
-  // the tab shows — red = fails / refused, amber = conditional on an unknown manifest input.
+  // tab count badges (dexllm-web .dextab .n). The number is the entry count (signing: pair
+  // count / "none"); the colour follows the SAME verdicts the tab shows — red = something fails or
+  // is refused (Container: a failing gate, an undeliverable or device-rejected entry, a role ≠
+  // content mismatch, a tamper finding), amber = conditional on an unknown manifest input.
   const badge = (id, text, level) => {
     const el = $(id); el.textContent = text;
     el.classList.toggle("alert", level === "alert"); el.classList.toggle("warn", level === "warn");
   };
   if (gate.ok) {
     const fatal = gate.installable === false || gate.entries.some(e => e.install_fatal);
-    badge("#n-gate", gate.entry_count, fatal ? "alert" : gate.installable === null ? "warn" : null);
-    const xs = gate.extract.summary;
-    badge("#n-extract", gate.entry_count, xs.undeliverable || xs.device_rejected ? "alert" : null);
-  } else { badge("#n-gate", "refused", "alert"); badge("#n-extract", "refused", "alert"); }
-  if (content.ok) badge("#n-content", content.entry_count, content.summary.role_mismatch ? "alert" : null);
-  else badge("#n-content", "refused", "alert");
-  if (tamper.ok) { const n = tamper.findings.filter(f => f.severity !== "info").length; badge("#n-tamper", n || "clean", n ? "alert" : null); }
-  else badge("#n-tamper", "failed", "alert");
+    const xs = gate.extract.ok ? gate.extract.summary : null;
+    const tf = tamper.ok ? tamper.findings.filter(f => f.severity !== "info").length : 0;
+    const why = [fatal && "the install gate fails", !xs && "no extract plan", xs?.undeliverable && `${xs.undeliverable} undeliverable`,
+      xs?.device_rejected && `${xs.device_rejected} device-rejected`, !content.ok && "no content map", content.ok && content.summary.role_mismatch && `${content.summary.role_mismatch} role ≠ content`,
+      !tamper.ok && "no tamper scan", tf && `${tf} tamper finding${tf === 1 ? "" : "s"}`].filter(Boolean);
+    const warn = !why.length && gate.installable === null;
+    badge("#n-container", gate.entry_count, why.length ? "alert" : warn ? "warn" : null);
+    $("#n-container").title = why.length ? why.join(" · ") : warn ? "installable depends on a manifest input not given" : "";
+  } else { badge("#n-container", "refused", "alert"); $("#n-container").title = "libziparchive refused to open"; }
   // amber: a pair walk stopped at a malformed pair, an ID occurs twice (only its first is read), or
   // a gate both AOSP readers apply first fails (then neither consumes the block)
   if (lfh && !lfh.ok) badge("#n-lfh", "failed", "alert");
@@ -762,16 +742,25 @@ function renderFilebar() {
   else badge("#n-signing", signingFailLabel(signing), "alert");
 }
 
-// Install gate -------------------------------------------------------------
+// Container: install gate · decompression plan · content · tamper scan ------
+// One tab over the four engine reports. Each keeps its own summary card, checks list and filter
+// chips; the entries meet in ONE table, a row per entry libziparchive enumerates: the install gate
+// (report.gate.entries), its reader (gate.extract.entries — the same archive order, row for row)
+// and its content (report.content.entries, joined by the raw name bytes: libziparchive refuses a
+// name listed twice, so the key is unique). The raw walk — apkllm's own reader, another view —
+// stays its own table below.
 const CLASS_ORDER = ["dex", "native_lib", "manifest", "resources_arsc", "resource", "meta", "other"];
-let gateClassOn = new Set(CLASS_ORDER);
+const READER_ORDER = ["ART.DexFileLoader", "NativeLibraryHelper", "AssetManager", "libziparchive"];
+let gateClassOn = new Set(CLASS_ORDER), xReaderOn = null, contentCatOn = null, xSel = new Set(), xBusy = false;
+const ekey = (x) => (x.name_hex ? "x:" + x.name_hex : "s:" + x.name);   // raw bytes, not the rendering
+const toggleChip = (set, ch, k) => { if (set.has(k)) set.delete(k); else set.add(k); ch.classList.toggle("on"); renderEntriesTable(); };
 function renderGate() {
   const g = report.gate;
   const v = $("#gate-verdict");
   if (!g.ok) {
     v.innerHTML = `<span class="pill bad">libziparchive refused to open</span> <span class="err">${esc(g.error)}</span>
-      <p class="note">The device's own reader rejects this container; see the Tamper scan tab for what the raw walk sees${report.lfh ? ", and the <b>LFH chain</b> tab for what a sequential reader finds in it" : ""}.</p>`;
-    $("#gate-checks").innerHTML = ""; $("#gate-table").innerHTML = ""; $("#gate-chips").innerHTML = ""; $("#gate-count").textContent = "";
+      <p class="note">The device's own reader rejects this container; the <b>Raw walk</b> below shows what apkllm's own reader sees${report.lfh ? ", and the <b>LFH chain</b> tab what a sequential reader finds in it" : ""}.</p>`;
+    $("#gate-checks").innerHTML = ""; $("#gate-chips").innerHTML = "";
     return;
   }
   v.innerHTML = `<dl class="kv">
@@ -789,31 +778,138 @@ function renderGate() {
   for (const e of g.entries) counts[e.class] = (counts[e.class] ?? 0) + 1;
   $("#gate-chips").innerHTML = CLASS_ORDER.filter(c => counts[c]).map(c =>
     `<span class="chip ${gateClassOn.has(c) ? "on" : ""}" data-c="${c}">${c}<span class="n">${counts[c]}</span></span>`).join(" ");
-  for (const ch of $("#gate-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
-    const c = ch.dataset.c; if (gateClassOn.has(c)) gateClassOn.delete(c); else gateClassOn.add(c);
-    ch.classList.toggle("on"); renderGateTable();
-  });
-  renderGateTable();
+  for (const ch of $("#gate-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => toggleChip(gateClassOn, ch, ch.dataset.c));
 }
-$("#gate-filter").addEventListener("input", renderGateTable);
-function renderGateTable() {
-  const g = report.gate; if (!g.ok) return;
-  const q = $("#gate-filter").value.toLowerCase();
-  const rows = g.entries.map((e, i) => ({ e, i })).filter(({ e }) => gateClassOn.has(e.class) && (!q || e.name.toLowerCase().includes(q)));
-  $("#gate-count").textContent = rows.length + " / " + g.entries.length;
-  $("#gate-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>class</th><th>method</th><th class="num">size</th><th class="num">compressed</th><th class="num">offset</th><th>4K</th><th>16K</th><th>gate</th><th>verdict</th><th>reason</th><th></th></tr></thead><tbody>` +
-    rows.map(({ e, i }) => `<tr class="${!e.passes ? (e.conditional ? "cond" : "fail") : ""}">
-      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="gate" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span>${e.primary_multidex ? ' <span class="pill info">ART auto-load</span>' : ""}</td>
-      <td>${e.class}</td><td>${e.method}${e.method_known ? "" : ' <span class="pill bad">forged</span>'}${e.has_data_descriptor ? ' <span class="tiny">DD</span>' : ""}</td>
+function renderExtract() {
+  const g = report.gate, x = g.ok ? g.extract : g;
+  if (!x.ok) {
+    $("#extract-summary").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(x.error)}</span>
+      <p class="note">libziparchive does not open this container, so no device reader can deliver any entry. The <b>Raw walk</b> below shows what apkllm's own reader sees.</p>`;
+    $("#extract-checks").innerHTML = ""; $("#extract-chips").innerHTML = "";
+    syncExtractButtons();
+    return;
+  }
+  const s = x.summary;
+  const hist = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)} <span class="tiny">${n}</span>`).join(" · ");
+  $("#extract-summary").innerHTML = `<dl class="kv">
+    <dt>by reader</dt><dd>${hist(s.by_reader)}</dd>
+    <dt>by disposition</dt><dd>${hist(s.by_disposition)}</dd>
+    <dt>inflated on extract</dt><dd>${s.will_inflate} <span class="tiny">· stored ${s.stored_or_mmap}</span></dd>
+    <dt>method forged</dt><dd>${s.diverges}</dd>
+    <dt>undeliverable</dt><dd>${s.undeliverable ? `<span class="pill warn">${s.undeliverable}</span> <span class="tiny">strict reader rejects — extraction reports the reason instead of bytes</span>` : "0"}</dd>
+    <dt>device rejects</dt><dd>${s.device_rejected} <span class="tiny">(device_loads=false; still extracted when its reader can deliver)</span></dd>
+    <dt>inputs echoed</dt><dd>extractNativeLibs=${x.extract_native_libs ?? "unknown"} · targetSdk=${x.target_sdk ?? "unknown"} · page=${g.page_size}</dd>
+  </dl>`;
+  renderChecks($("#extract-checks"), x.checks);
+  if (!xReaderOn) xReaderOn = new Set(READER_ORDER);
+  $("#extract-chips").innerHTML = READER_ORDER.filter(r => s.by_reader[r]).map(r =>
+    `<span class="chip ${xReaderOn.has(r) ? "on" : ""}" data-r="${esc(r)}">${esc(r)}<span class="n">${s.by_reader[r]}</span></span>`).join(" ");
+  for (const ch of $("#extract-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => toggleChip(xReaderOn, ch, ch.dataset.r));
+  // a re-run gate keeps the selection: it holds entry indices, and the entry order is the
+  // archive's, independent of the manifest inputs
+  for (const i of [...xSel]) if (i >= x.entries.length) xSel.delete(i);
+}
+function renderContent() {
+  const c = report.content;
+  $("#content-hex").innerHTML = ""; hexView = null; selRow = null; $("#hex-jump").style.display = "none";
+  if (!c.ok) {
+    $("#content-summary").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(c.error)}</span>`;
+    $("#content-checks").innerHTML = ""; $("#content-chips").innerHTML = "";
+    contentCatOn = new Set();
+    return;
+  }
+  const s = c.summary;
+  $("#content-summary").innerHTML = `<dl class="kv">
+    <dt>by content type</dt><dd>${Object.entries(s.by_content_type).map(([k, n]) => `${esc(k)} <span class="tiny">${n}</span>`).join(" · ")}</dd>
+    <dt>unknown by kind</dt><dd>${Object.keys(s.unknown_by_kind).length ? Object.entries(s.unknown_by_kind).map(([k, n]) => `${k} <span class="tiny">${n}</span>`).join(" · ") : "—"}</dd>
+    <dt>role mismatch</dt><dd>${s.role_mismatch} ${s.role_indeterminate ? `<span class="tiny">(+${s.role_indeterminate} unreadable)</span>` : ""}</dd>
+    <dt>extension mismatch</dt><dd>${s.extension_mismatch} ${s.extension_indeterminate ? `<span class="tiny">(+${s.extension_indeterminate} unreadable)</span>` : ""}</dd>
+  </dl>`;
+  renderChecks($("#content-checks"), c.checks);
+  contentCatOn = new Set(Object.keys(s.by_category));
+  $("#content-chips").innerHTML = Object.entries(s.by_category).map(([k, n]) => `<span class="chip on" data-c="${esc(k)}">${esc(k)}<span class="n">${n}</span></span>`).join(" ");
+  for (const ch of $("#content-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => toggleChip(contentCatOn, ch, ch.dataset.c));
+}
+// every gate row with its plan row and its content row (index into report.content.entries, -1 when
+// the content walk has none); the content map is built once per report
+let contentIdx = { rep: null, m: new Map() };
+function entryJoin() {
+  const g = report.gate; if (!g.ok) return [];
+  const x = g.extract?.ok ? g.extract.entries : null, c = report.content;
+  if (contentIdx.rep !== report) {
+    const m = new Map(); if (c.ok) c.entries.forEach((e, k) => m.set(ekey(e), k));
+    contentIdx = { rep: report, m };
+  }
+  return g.entries.map((e, i) => ({ e, i, x: x?.[i] ?? null, ci: contentIdx.m.get(ekey(e)) ?? -1 }));
+}
+// a row's highlight: fail = the gate fails or its reader rejects / the device does not load it;
+// cond = it hangs on an unknown manifest input; flag = the content walk disagrees (role / extension
+// ≠ content, or the plan delivers it but reading it errors or is rejected)
+function rowLevel({ e, x, ci }) {
+  const ce = ci >= 0 ? report.content.entries[ci] : null;
+  if ((!e.passes && !e.conditional) || (x && (!x.deliverable || x.device_loads === false))) return "fail";
+  if (e.conditional || x?.device_loads === null) return "cond";
+  if (ce && (ce.role_mismatch === true || ce.extension_mismatch === true || (x?.deliverable && (ce.disposition === "error" || ce.disposition === "rejected")))) return "flag";
+  return "";
+}
+function shownEntryRows() {
+  const q = $("#entries-filter").value.toLowerCase(), c = report.content;
+  return entryJoin().filter(({ e, x, ci }) => gateClassOn.has(e.class) && (!x || !xReaderOn || xReaderOn.has(x.reader))
+    && (ci < 0 || !contentCatOn || contentCatOn.has(c.entries[ci].category)) && (!q || e.name.toLowerCase().includes(q)));
+}
+$("#entries-filter").addEventListener("input", () => { if (report?.gate.ok) renderEntriesTable(); });
+function renderEntriesTable() {
+  const g = report.gate, t = $("#entries-table");
+  if (!g.ok) { t.innerHTML = ""; $("#entries-count").textContent = ""; syncExtractButtons(); return; }
+  const c = report.content, rows = shownEntryRows(), shown = new Set(rows.map(r => r.i));
+  // a chip or the filter can hide a failing row: say how many, so hiding is never silent
+  const hid = { fail: 0, flag: 0 };
+  for (const r of entryJoin()) if (!shown.has(r.i)) { const l = rowLevel(r); if (l in hid) hid[l]++; }
+  const hidTxt = [hid.fail && `${hid.fail} failing`, hid.flag && `${hid.flag} flagged`].filter(Boolean).join(" · ");
+  $("#entries-count").innerHTML = rows.length + " / " + g.entries.length + (hidTxt ? ` <span class="err">· ${hidTxt} hidden</span>` : "");
+  const dash = '<span class="dim">—</span>';
+  // the verdict columns first (gate · reader · content), the layout facts after them
+  t.innerHTML = `<thead><tr><th></th><th>#</th><th>name</th><th>class</th><th>gate</th><th>reader</th><th>disposition</th><th>device loads</th><th>deliverable</th><th>read</th><th>content</th><th>category</th><th>detail</th><th>flags</th><th>method</th><th class="num">size</th><th class="num">compressed</th><th class="num">offset</th><th>4K</th><th>16K</th><th class="num">entropy</th><th>reason</th><th></th></tr></thead><tbody>` +
+    rows.map((r) => {
+      const { e, i, x, ci } = r, ce = ci >= 0 ? c.entries[ci] : null;
+      return `<tr data-i="${i}" data-ci="${ci}" title="click: its bytes in hex · double-click: extract with its reader and download" class="${rowLevel(r)}">
+      <td><input type="checkbox" data-i="${i}" ${xSel.has(i) ? "checked" : ""}></td>
+      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="entry" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span>${e.primary_multidex ? ' <span class="pill info">ART auto-load</span>' : ""}</td>
+      <td>${e.class}</td>
+      <td title="${esc(e.gate)}">${e.passes ? '<span class="pill ok">passes</span>' : e.conditional ? '<span class="pill warn">conditional</span>' : `<span class="pill bad">${e.install_fatal ? "install fatal" : "fails"}</span>`} <span class="tiny">${esc(e.gate)}</span></td>
+      <td>${x ? esc(x.reader) : dash}</td><td>${x ? esc(x.disposition) : dash}</td><td>${x ? tri(x.device_loads) : dash}</td>
+      <td>${!x ? dash : x.deliverable ? '<span class="pill ok">yes</span>' : '<span class="pill bad">rejected</span>'}</td>
+      <td>${ce ? (ce.disposition === "error" || ce.disposition === "rejected" ? `<span class="err">${esc(ce.disposition)}</span>` : esc(ce.disposition)) + (ce.error ? ` <span class="err" title="${esc(ce.error)}">!</span>` : "") : dash}</td>
+      <td>${ce ? esc(ce.content_type) + (ce.unknown_kind ? ` <span class="tiny">${ce.unknown_kind}</span>` : "") : dash}</td>
+      <td class="dim">${ce ? esc(ce.category) : "—"}</td>
+      <td class="wrap dim">${ce && Object.keys(ce.detail).length ? esc(JSON.stringify(ce.detail)) : ""}</td>
+      <td>${ce ? (ce.role_mismatch === true ? '<span class="pill bad">role ≠ content</span>' : ce.role_mismatch === null ? '<span class="pill na">role ?</span>' : "")
+          + (ce.extension_mismatch === true ? ' <span class="pill warn">ext ≠ content</span>' : ce.extension_mismatch === null ? ' <span class="pill na">ext ?</span>' : "")
+          + (ce.encrypted_flag ? ' <span class="pill warn">gpbf encrypted</span>' : "")
+          + (ce.size_validated ? "" : ' <span class="tiny" title="head stopped early or reader rejected — passed no end-of-entry check">partial</span>') : ""}</td>
+      <td>${e.method}${e.method_known ? "" : ' <span class="pill bad">forged</span>'}${e.has_data_descriptor ? ' <span class="tiny">DD</span>' : ""}${x?.decompresses ? ' <span class="tiny">inflate</span>' : ""}</td>
       <td class="num">${e.uncompressed_size}</td><td class="num">${e.compressed_size}</td><td class="num">${hex(e.data_offset)}</td>
       <td>${e.aligned_4k ? "✓" : "·"}</td><td>${e.aligned_16k ? "✓" : "·"}</td>
-      <td class="dim">${esc(e.gate)}</td>
-      <td>${e.passes ? '<span class="pill ok">passes</span>' : e.conditional ? '<span class="pill warn">conditional</span>' : `<span class="pill bad">${e.install_fatal ? "install fatal" : "fails"}</span>`}</td>
-      <td class="wrap">${esc(e.reason)}${e.needs.length ? ` <span class="tiny">needs: ${esc(e.needs.join(", "))}</span>` : ""}</td>
-      <td><button data-i="${i}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
+      <td class="num">${ce?.entropy == null ? "—" : ce.entropy.toFixed(2)}</td>
+      <td class="wrap">${esc(e.reason)}${e.needs.length ? ` <span class="tiny">needs: ${esc(e.needs.join(", "))}</span>` : ""}${x && x.reason && x.reason !== e.reason ? `<div class="tiny">reader: ${esc(x.reason)}</div>` : ""}</td>
+      <td><button data-i="${i}" title="${BYTES_TITLE}">bytes</button></td></tr>`; }).join("") + "</tbody>";
+  for (const cb of t.querySelectorAll("input[data-i]")) cb.addEventListener("change", () => {
+    const i = Number(cb.dataset.i);
+    if (cb.checked) xSel.add(i); else xSel.delete(i);
+    syncExtractButtons();
+  });
   // by index, not a name attribute: the HTML parser turns CR in an attribute into LF
-  for (const b of $("#gate-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2) extractAndSave(Number(b.dataset.i), b); });
+  for (const b of t.querySelectorAll("button[data-i]")) b.addEventListener("click", (ev) => { if (ev.detail < 2 && !xBusy) extractAndSave(Number(b.dataset.i), b, $("#x-status")); });
+  // the row's own selection survives a re-render (filter, chip, re-run gate)
+  if (selRow?.rep === report) t.querySelector(`tr[data-i="${selRow.i}"]`)?.classList.add("sel");
+  syncExtractButtons();
 }
+// click a row → its content head in hex (the checkbox, the bytes button and a name copy keep theirs)
+$("#entries-table").addEventListener("click", (ev) => {
+  if (ev.target.closest("input, button, .copyable") || ev.detail > 1) return;
+  const tr = ev.target.closest("tbody tr[data-i]"); if (!tr || !report) return;
+  showHead(Number(tr.dataset.ci), tr);
+});
 
 const BYTES_TITLE = "device-faithful bytes from the entry's own reader (method 8 inflate / 0 stored / forged → AssetManager raw, strict readers reject), downloaded as {md5}.zip = {md5}.bin + {md5}.json";
 function saveBlob(blob, filename) {
@@ -857,71 +953,10 @@ async function extractAndSave(index, el, statusEl) {
   finally { extracting.delete(index); el.classList.remove("busy"); if (el.tagName === "BUTTON") el.disabled = false; }
 }
 
-// Extract -------------------------------------------------------------------
+// Extract ------------------------------------------------------------------
 // every #x-status write goes here: the line is one ellipsized row, so its tooltip carries the
 // full text and must never lag behind it
 function setXStatus(html, el = $("#x-status")) { el.innerHTML = html; el.title = el.textContent; }
-const READER_ORDER = ["ART.DexFileLoader", "NativeLibraryHelper", "AssetManager", "libziparchive"];
-let xReaderOn = null, xSel = new Set(), xBusy = false;
-function renderExtract() {
-  const g = report.gate, x = g.ok ? g.extract : g;
-  if (!x.ok) {
-    $("#extract-summary").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(x.error)}</span>
-      <p class="note">libziparchive does not open this container, so no device reader can deliver any entry. The Tamper scan tab shows what the raw walk sees.</p>`;
-    $("#extract-checks").innerHTML = ""; $("#extract-table").innerHTML = ""; $("#extract-chips").innerHTML = ""; $("#extract-count").textContent = "";
-    syncExtractButtons();
-    return;
-  }
-  const s = x.summary;
-  const hist = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)} <span class="tiny">${n}</span>`).join(" · ");
-  $("#extract-summary").innerHTML = `<dl class="kv">
-    <dt>by reader</dt><dd>${hist(s.by_reader)}</dd>
-    <dt>by disposition</dt><dd>${hist(s.by_disposition)}</dd>
-    <dt>inflated on extract</dt><dd>${s.will_inflate} <span class="tiny">· stored ${s.stored_or_mmap}</span></dd>
-    <dt>method forged</dt><dd>${s.diverges}</dd>
-    <dt>undeliverable</dt><dd>${s.undeliverable ? `<span class="pill warn">${s.undeliverable}</span> <span class="tiny">strict reader rejects — extraction reports the reason instead of bytes</span>` : "0"}</dd>
-    <dt>device rejects</dt><dd>${s.device_rejected} <span class="tiny">(device_loads=false; still extracted when its reader can deliver)</span></dd>
-    <dt>inputs echoed</dt><dd>extractNativeLibs=${x.extract_native_libs ?? "unknown"} · targetSdk=${x.target_sdk ?? "unknown"} · page=${g.page_size}</dd>
-  </dl>`;
-  renderChecks($("#extract-checks"), x.checks);
-  if (!xReaderOn) xReaderOn = new Set(READER_ORDER);
-  $("#extract-chips").innerHTML = READER_ORDER.filter(r => s.by_reader[r]).map(r =>
-    `<span class="chip ${xReaderOn.has(r) ? "on" : ""}" data-r="${esc(r)}">${esc(r)}<span class="n">${s.by_reader[r]}</span></span>`).join(" ");
-  for (const ch of $("#extract-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
-    const r = ch.dataset.r; if (xReaderOn.has(r)) xReaderOn.delete(r); else xReaderOn.add(r);
-    ch.classList.toggle("on"); renderExtractTable();
-  });
-  // a re-run gate keeps the selection: it holds entry indices, and the entry order is the
-  // archive's, independent of the manifest inputs
-  for (const i of [...xSel]) if (i >= x.entries.length) xSel.delete(i);
-  renderExtractTable();
-}
-function shownExtractRows() {
-  const x = report.gate.extract, q = $("#extract-filter").value.toLowerCase();
-  return x.entries.map((e, i) => ({ e, i })).filter(({ e }) => xReaderOn.has(e.reader) && (!q || e.name.toLowerCase().includes(q)));
-}
-$("#extract-filter").addEventListener("input", () => { if (report?.gate.ok) renderExtractTable(); });
-function renderExtractTable() {
-  const x = report.gate.extract;
-  const rows = shownExtractRows();
-  $("#extract-count").textContent = rows.length + " / " + x.entries.length;
-  $("#extract-table").innerHTML = `<thead><tr><th></th><th>#</th><th>name</th><th>class</th><th>reader</th><th>method</th><th>disposition</th><th>device loads</th><th>deliverable</th><th>reason</th><th></th></tr></thead><tbody>` +
-    rows.map(({ e, i }) => `<tr data-i="${i}" title="double-click to extract with its reader and download" class="${!e.deliverable || e.device_loads === false ? "fail" : e.device_loads === null ? "cond" : ""}">
-      <td><input type="checkbox" data-i="${i}" ${xSel.has(i) ? "checked" : ""}></td>
-      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="extract" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span></td><td>${e.class}</td><td>${esc(e.reader)}</td>
-      <td>${e.method}${e.diverges ? ' <span class="pill bad">forged</span>' : e.decompresses ? ' <span class="tiny">inflate</span>' : ""}</td>
-      <td>${esc(e.disposition)}</td><td>${tri(e.device_loads)}</td>
-      <td>${e.deliverable ? '<span class="pill ok">yes</span>' : '<span class="pill bad">rejected</span>'}</td>
-      <td class="wrap">${esc(e.reason)}</td>
-      <td><button data-i="${i}" title="${BYTES_TITLE}">bytes</button></td></tr>`).join("") + "</tbody>";
-  for (const cb of $("#extract-table").querySelectorAll("input[data-i]")) cb.addEventListener("change", () => {
-    const i = Number(cb.dataset.i);
-    if (cb.checked) xSel.add(i); else xSel.delete(i);
-    syncExtractButtons();
-  });
-  for (const b of $("#extract-table").querySelectorAll("button[data-i]")) b.addEventListener("click", (e) => { if (e.detail < 2 && !xBusy) extractAndSave(Number(b.dataset.i), b, $("#x-status")); });
-  syncExtractButtons();
-}
 function syncExtractButtons() {
   const ok = !!report?.gate.ok;
   $("#x-bundle").disabled = xBusy || !ok || xSel.size === 0;
@@ -932,15 +967,15 @@ function syncExtractButtons() {
 }
 // double-click a row → extract that entry with its own reader and download it (a rejected
 // entry reports its reader's reason). The checkbox and the bytes button keep their own clicks.
-$("#extract-table").addEventListener("dblclick", (e) => {
+$("#entries-table").addEventListener("dblclick", (e) => {
   window.getSelection()?.removeAllRanges();   // a double-click selects a word (also next to a button); drop it
   if (!report?.gate.ok || xBusy || e.target.closest("input, button")) return;   // not during a bundle
   const tr = e.target.closest("tbody tr[data-i]"); if (!tr) return;
   clearTimeout(pendingCopy);                  // …and the name click it began is not a copy
   extractAndSave(Number(tr.dataset.i), tr, $("#x-status"));
 });
-$("#x-sel-shown").addEventListener("click", () => { for (const { i } of shownExtractRows()) xSel.add(i); renderExtractTable(); });
-$("#x-sel-none").addEventListener("click", () => { xSel.clear(); renderExtractTable(); });
+$("#x-sel-shown").addEventListener("click", () => { for (const { i } of shownEntryRows()) xSel.add(i); renderEntriesTable(); });
+$("#x-sel-none").addEventListener("click", () => { xSel.clear(); renderEntriesTable(); });
 $("#x-bundle").addEventListener("click", () => extractBundle([...xSel]));
 $("#x-cancel").addEventListener("click", () => worker.postMessage({ type: "cancel" }));
 $("#x-all").addEventListener("click", () => extractBundle(report.gate.extract.entries.map((_, i) => i)));
@@ -969,73 +1004,75 @@ async function extractBundle(indices) {
   finally { xBusy = false; syncExtractButtons(); }
 }
 
-// Content ------------------------------------------------------------------
-let contentCatOn = null;
-function renderContent() {
-  const c = report.content;
-  if (!c.ok) {
-    $("#content-summary").innerHTML = `<span class="pill bad">unavailable</span> <span class="err">${esc(c.error)}</span>`;
-    $("#content-checks").innerHTML = ""; $("#content-table").innerHTML = ""; $("#content-chips").innerHTML = ""; $("#content-count").textContent = ""; $("#content-hex").innerHTML = "";
+// Hex view ------------------------------------------------------------------
+// The dump starts on the head the load already read (headBytes = content_map's own head) and can
+// ask the worker for more of the SAME read — entryHeads over that one entry, its own device reader
+// stopped later — in steps up to the worker's 1 MiB ceiling; past it, a double-click downloads it.
+const HEX_STEPS = [64 * 1024, 1024 * 1024];
+let hexView = null;   // { i, rep, h, asked } — i = content row; h = the head shown (the load's or a longer one)
+let selRow = null;    // { i, rep } — the selected row by gate index (rows without a content row have no hexView)
+// the dump renders below the table box. A click never scrolls the page: the second click of a
+// double-click (whatever the OS interval) must land on the row the first one picked — "↓ hex" jumps
+function showHead(ci, tr) {
+  $("#entries-table").querySelectorAll("tr.sel").forEach(x => x.classList.remove("sel"));
+  tr.classList.add("sel"); selRow = { i: Number(tr.dataset.i), rep: report };
+  $("#hex-jump").style.display = "";
+  const h = ci >= 0 ? report.content.heads?.[ci] : null;
+  if (!h) {
+    hexView = null;
+    $("#content-hex").innerHTML = `<div class="hexhead"><span class="tiny">no device-produced head for this entry${report.content.ok ? "" : " — the content map is unavailable"}</span></div>`;
     return;
   }
-  const s = c.summary;
-  $("#content-summary").innerHTML = `<dl class="kv">
-    <dt>by content type</dt><dd>${Object.entries(s.by_content_type).map(([k, n]) => `${esc(k)} <span class="tiny">${n}</span>`).join(" · ")}</dd>
-    <dt>unknown by kind</dt><dd>${Object.keys(s.unknown_by_kind).length ? Object.entries(s.unknown_by_kind).map(([k, n]) => `${k} <span class="tiny">${n}</span>`).join(" · ") : "—"}</dd>
-    <dt>role mismatch</dt><dd>${s.role_mismatch} ${s.role_indeterminate ? `<span class="tiny">(+${s.role_indeterminate} unreadable)</span>` : ""}</dd>
-    <dt>extension mismatch</dt><dd>${s.extension_mismatch} ${s.extension_indeterminate ? `<span class="tiny">(+${s.extension_indeterminate} unreadable)</span>` : ""}</dd>
-  </dl>`;
-  renderChecks($("#content-checks"), c.checks);
-  contentCatOn = new Set(Object.keys(s.by_category));
-  $("#content-chips").innerHTML = Object.entries(s.by_category).map(([k, n]) => `<span class="chip on" data-c="${esc(k)}">${esc(k)}<span class="n">${n}</span></span>`).join(" ");
-  for (const ch of $("#content-chips").querySelectorAll(".chip")) ch.addEventListener("click", () => {
-    const k = ch.dataset.c; if (contentCatOn.has(k)) contentCatOn.delete(k); else contentCatOn.add(k);
-    ch.classList.toggle("on"); renderContentTable();
-  });
-  $("#content-hex").innerHTML = "";
-  renderContentTable();
+  renderHex(ci, h);
 }
-$("#content-filter").addEventListener("input", renderContentTable);
-function renderContentTable() {
-  const c = report.content; if (!c.ok) return;
-  const q = $("#content-filter").value.toLowerCase();
-  const rows = c.entries.map((e, i) => ({ e, i })).filter(({ e }) => contentCatOn.has(e.category) && (!q || e.name.toLowerCase().includes(q)));
-  $("#content-count").textContent = rows.length + " / " + c.entries.length;
-  $("#content-table").innerHTML = `<thead><tr><th>#</th><th>name</th><th>class</th><th>reader</th><th>content</th><th>category</th><th>detail</th><th class="num">entropy</th><th>size ok</th><th>flags</th></tr></thead><tbody>` +
-    rows.map(({ e, i }) => `<tr data-i="${i}" class="${e.role_mismatch === true || e.extension_mismatch === true ? "flag" : ""}">
-      <td class="dim">${i}</td><td class="name"><span class="copyable" data-src="content" data-i="${i}" title="click to copy the entry name">${esc(e.name)}</span></td><td>${e.class}</td>
-      <td>${e.disposition}${e.error ? ` <span class="err" title="${esc(e.error)}">!</span>` : ""}</td>
-      <td>${esc(e.content_type)}${e.unknown_kind ? ` <span class="tiny">${e.unknown_kind}</span>` : ""}</td>
-      <td class="dim">${esc(e.category)}</td>
-      <td class="wrap dim">${Object.keys(e.detail).length ? esc(JSON.stringify(e.detail)) : ""}</td>
-      <td class="num">${e.entropy == null ? "—" : e.entropy.toFixed(2)}</td>
-      <td>${e.size_validated ? "✓" : '<span class="tiny" title="head stopped early or reader rejected — passed no end-of-entry check">partial</span>'}</td>
-      <td>${e.role_mismatch === true ? '<span class="pill bad">role ≠ content</span>' : e.role_mismatch === null ? '<span class="pill na">role ?</span>' : ""}
-          ${e.extension_mismatch === true ? '<span class="pill warn">ext ≠ content</span>' : e.extension_mismatch === null ? '<span class="pill na">ext ?</span>' : ""}
-          ${e.encrypted_flag ? '<span class="pill warn">gpbf encrypted</span>' : ""}</td></tr>`).join("") + "</tbody>";
-  for (const tr of $("#content-table").querySelectorAll("tr[data-i]")) tr.addEventListener("click", (e) => { if (!e.target.closest(".copyable")) showHead(Number(tr.dataset.i), tr); });
-}
-function showHead(i, tr) {
-  requestAnimationFrame(() => $("#content-hex").scrollIntoView({ block: "nearest" }));   // the dump renders below the table box
-  $("#content-table").querySelectorAll("tr.sel").forEach(x => x.classList.remove("sel"));
-  tr.classList.add("sel");
-  const h = report.content.heads[i];
-  if (!h) { $("#content-hex").innerHTML = ""; return; }
-  const b = h.head; let out = "";
+function renderHex(i, h, note = "", asked = report.headBytes) {
+  hexView = { i, rep: report, h, asked };
+  const b = h.head, lines = [];
   for (let o = 0; o < b.length; o += 16) {
     const chunk = b.subarray(o, o + 16);
     const hx = Array.from(chunk, x => x.toString(16).padStart(2, "0")).join(" ").padEnd(47);
     const as = Array.from(chunk, x => x >= 0x20 && x < 0x7f ? String.fromCharCode(x) : ".").join("");
-    out += o.toString(16).padStart(8, "0") + "  " + hx + "  " + as + "\n";
+    lines.push(o.toString(16).padStart(8, "0") + "  " + hx + "  " + as + "\n");
   }
+  const out = lines.join("");
+  // the engine's `complete` = the reader produced the WHOLE entry (and its CRC passed) — the head
+  // still holds only the first n bytes of it: a 688-byte entry read whole keeps 512. The dump is
+  // the whole entry only when it has every byte.
+  const whole = h.complete && b.length === h.uncompressed_size;
+  // a reader that produced more than the entry declares — the device fails it at the end-of-entry
+  // size check, so reading on would only show bytes no device delivers
+  const overrun = !h.complete && typeof h.uncompressed_size === "number" && b.length >= h.uncompressed_size && b.length > 0;
+  // more only helps where the head stopped at what was asked (not a reject, not an error mid-entry)
+  const stoppedEarly = !whole && !overrun && b.length >= asked && h.disposition !== "rejected" && h.disposition !== "error";
+  const next = stoppedEarly ? HEX_STEPS.find(n => n > b.length) : null;
+  const more = next ? `<button class="morebtn" type="button" id="hex-more" data-n="${next}" title="Read more of this entry through the same reader">show up to ${fmtKiB(next)}</button>`
+    : stoppedEarly ? `<span class="tiny">the whole entry: double-click its row</span>` : "";
+  const what = h.disposition === "error" ? `the bytes its reader produced before it failed${h.error ? ": " + h.error : ""}`
+    : `first ${b.length} bytes as its ${h.disposition} reader produced them${whole ? " (whole entry)" : ""}`;
+  const warn = overrun ? `inflates past its declared ${h.uncompressed_size} bytes — the device fails this entry at its size check` : "";
   $("#content-hex").dataset.i = i;
-  $("#content-hex").innerHTML = `<div class="hexhead"><span class="tiny">${esc(h.name)} — first ${b.length} bytes as its ${h.disposition} reader produced them${h.complete ? " (whole entry)" : ""}</span><button class="copybtn" type="button" data-copy="content-hex" title="Copy this hex dump as text">⧉ copy</button></div><pre class="hex">${esc(out) || "(empty)"}</pre>`;
+  $("#content-hex").innerHTML = `<div class="hexhead"><span class="tiny">${esc(h.name)} — ${esc(what)}${h.disposition === "error" ? ` (${b.length} bytes)` : ""}</span>${more}<button class="copybtn" type="button" data-copy="content-hex" title="Copy this hex dump as text">⧉ copy</button>${warn ? `<span class="pill warn">${esc(warn)}</span>` : ""}${note ? `<span class="tiny">${esc(note)}</span>` : ""}</div><pre class="hex">${esc(out) || "(empty)"}</pre>`;
 }
+const fmtKiB = (n) => n >= 1024 * 1024 ? n / (1024 * 1024) + " MiB" : n / 1024 + " KiB";
+$("#hex-jump").addEventListener("click", () => $("#content-hex").scrollIntoView({ block: "nearest" }));
+$("#content-hex").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("#hex-more");
+  if (!btn || !hexView) return;
+  const view = hexView, { i, rep } = view, e = rep.content.entries[i], n = Number(btn.dataset.n);
+  btn.disabled = true; btn.textContent = "reading…";
+  let r;
+  try { r = await wcall({ type: "head", name: e.name, name_hex: e.name_hex ?? null, n }); }
+  catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
+  // another row, another file, or a fresh click on this same row may be on screen by now
+  if (hexView !== view || report !== rep) return;
+  if (!r.ok) { renderHex(i, view.h, "could not read more: " + r.error, view.asked); return; }
+  renderHex(i, r, "", n);
+});
 
 // Images -------------------------------------------------------------------
-// The gallery is the Content tab's classification seen as pictures: an entry is listed when
+// The gallery is the content map's classification seen as pictures: an entry is listed when
 // its device-produced bytes are an image by magic (category "image") — whatever its name. A
-// name that claims an image over other bytes is the Content tab's "ext ≠ content" flag, not
+// name that claims an image over other bytes is the entries table's "ext ≠ content" flag, not
 // a picture, so it is not repeated here. Pixels come only from extractEntry (the entry's own mapped
 // reader, exactly what "bytes" downloads); the Blob's MIME type is taken from the magic, never
 // from the name. Thumbnails load lazily — only tiles in view of the open tab, a few at a time,
@@ -1474,20 +1511,24 @@ const COPY = {
     report.lfh.entries.map((e, i) => [i, e.name, e.name_hex ?? "", e.offset, e.data_offset, e.method, e.flags, e.compressed_size ?? "", e.uncompressed_size ?? "", e.crc32 ?? "", tri3(e.crc_ok), e.deliverable, e.why ?? ""])) : "LFH chain\tnot run",
   "gate-verdict": () => report.gate.ok ? kvText($("#gate-verdict")) || $("#gate-verdict").textContent.trim() : unavailable(report.gate, "libziparchive refused to open"),
   "gate-checks": () => report.gate.ok ? checksText(report.gate.checks) : unavailable(report.gate, "libziparchive refused to open"),
-  "gate-entries": () => report.gate.ok ? tsv(["#", "name", "class", "method", "uncompressed", "compressed", "data_offset", "aligned_4k", "aligned_16k", "primary_multidex", "gate", "passes", "conditional", "install_fatal", "reason", "needs"],
-    report.gate.entries.map((e, i) => [i, e.name, e.class, e.method, e.uncompressed_size, e.compressed_size, e.data_offset, e.aligned_4k, e.aligned_16k, e.primary_multidex, e.gate, e.passes, e.conditional, e.install_fatal, e.reason, e.needs.join(", ")])) : unavailable(report.gate, "libziparchive refused to open"),
+  // the merged table: every gate row with its reader and its content columns (blank where that
+  // report has no row), whatever the chips and the filter show
+  "entries": () => report.gate.ok ? tsv(["#", "name", "name_hex", "class", "method", "uncompressed", "compressed", "data_offset", "aligned_4k", "aligned_16k", "primary_multidex", "gate", "passes", "conditional", "install_fatal", "reason", "needs",
+      "reader", "disposition", "device_loads", "deliverable", "decompresses", "diverges", "reader_reason",
+      "read", "content_type", "unknown_kind", "category", "detail", "entropy", "size_validated", "role_mismatch", "extension_mismatch", "encrypted_flag", "content_error"],
+    entryJoin().map(({ e, i, x, ci }) => { const c = ci >= 0 ? report.content.entries[ci] : null;
+      return [i, e.name, e.name_hex ?? "", e.class, e.method, e.uncompressed_size, e.compressed_size, e.data_offset, e.aligned_4k, e.aligned_16k, e.primary_multidex, e.gate, e.passes, e.conditional, e.install_fatal, e.reason, e.needs.join(", "),
+        ...(x ? [x.reader, x.disposition, tri3(x.device_loads), x.deliverable, x.decompresses, x.diverges, x.reason] : Array(7).fill("")),
+        ...(c ? [c.disposition, c.content_type, c.unknown_kind ?? "", c.category, Object.keys(c.detail).length ? c.detail : "", c.entropy, c.size_validated, tri3(c.role_mismatch), tri3(c.extension_mismatch), c.encrypted_flag, c.error ?? ""] : Array(11).fill(""))]; }))
+    : unavailable(report.gate, "libziparchive refused to open"),
   "extract-plan": () => report.gate.ok ? kvText($("#extract-summary")) : unavailable(report.gate, "unavailable"),
   "extract-checks": () => report.gate.ok ? checksText(report.gate.extract.checks) : unavailable(report.gate, "unavailable"),
-  "extract-entries": () => report.gate.ok ? tsv(["#", "name", "class", "reader", "method", "disposition", "device_loads", "deliverable", "decompresses", "diverges", "reason"],
-    report.gate.extract.entries.map((e, i) => [i, e.name, e.class, e.reader, e.method, e.disposition, tri3(e.device_loads), e.deliverable, e.decompresses, e.diverges, e.reason])) : unavailable(report.gate, "unavailable"),
   "content-summary": () => report.content.ok ? kvText($("#content-summary")) : unavailable(report.content, "unavailable"),
   "content-checks": () => report.content.ok ? checksText(report.content.checks) : unavailable(report.content, "unavailable"),
-  "content-entries": () => report.content.ok ? tsv(["#", "name", "class", "read", "content_type", "unknown_kind", "category", "detail", "entropy", "size_validated", "role_mismatch", "extension_mismatch", "encrypted_flag", "error"],
-    report.content.entries.map((e, i) => [i, e.name, e.class, e.disposition, e.content_type, e.unknown_kind ?? "", e.category, Object.keys(e.detail).length ? e.detail : "", e.entropy, e.size_validated, tri3(e.role_mismatch), tri3(e.extension_mismatch), e.encrypted_flag, e.error ?? ""])) : unavailable(report.content, "unavailable"),
   "content-hex": () => {
-    const i = Number($("#content-hex").dataset.i), h = report.content.heads?.[i];
+    const h = hexView?.rep === report ? hexView.h : null;
     if (!h) return "";
-    return `entry\t${cell(h.name)}\nread\t${h.disposition}\nbytes\t${h.head.length}${h.complete ? " (whole entry)" : ""}\n` + ($("#content-hex pre.hex")?.textContent || "");
+    return `entry\t${cell(h.name)}\nread\t${h.disposition}\nbytes\t${h.head.length}${h.complete && h.head.length === h.uncompressed_size ? " (whole entry)" : ""}\n${h.error ? "error\t" + cell(h.error) + "\n" : ""}` + ($("#content-hex pre.hex")?.textContent || "");
   },
   "images": () => report.content.ok ? tsv(["#", "name", "content_type", "extension", "extension_mismatch", "size", "width", "height", "read", "status", "error"],
     imgItems.map(it => [it.i, it.name, it.ctype, it.ext, tri3(it.extMismatch), it.size ?? "", it.w ?? "", it.h ?? "", it.read ?? "", it.state, it.err ?? ""])) : unavailable(report.content, "unavailable"),
@@ -1549,12 +1590,11 @@ const COPY = {
 };
 // the name a click-to-copy item stands for, straight from the report (byte-exact)
 const ITEM = {
-  gate: (i) => report.gate.entries?.[i]?.name, extract: (i) => report.gate.extract?.entries?.[i]?.name,
-  content: (i) => report.content.entries?.[i]?.name, tamper: (i) => report.tamper.entries?.[i]?.name,
+  entry: (i) => report.gate.entries?.[i]?.name, tamper: (i) => report.tamper.entries?.[i]?.name,
   finding: (i) => report.tamper.findings?.[i]?.entry, images: (k) => imgItems[k]?.name,
   lfh: (i) => report.lfh?.entries?.[i]?.name,
 };
-const TAB_TITLE = { gate: "Install gate", extract: "Extract", content: "Content", images: "Images", tamper: "Tamper scan", signing: "Signing", lfh: "LFH chain" };
+const TAB_TITLE = { container: "Container", images: "Images", signing: "Signing", lfh: "LFH chain" };
 let pendingCopy = 0;
 // one delegated listener: card buttons + click-to-copy items (rows re-render, so no per-node wiring)
 document.addEventListener("click", (e) => {
@@ -1563,7 +1603,7 @@ document.addEventListener("click", (e) => {
     if (!report) return;
     const body = COPY[btn.dataset.copy]?.();
     const tab = TAB_TITLE[btn.closest(".panel")?.id.replace("panel-", "")] || "";
-    const card = btn.dataset.copy === "content-hex" ? "Hex head" : (btn.closest("h2")?.firstChild?.textContent.trim() || btn.dataset.copy);
+    const card = btn.dataset.copy === "content-hex" ? "Hex head" : btn.closest("h3") ? "Checks · " + btn.closest("h3").firstChild.textContent.trim() : (btn.closest("h2")?.firstChild?.textContent.trim() || btn.dataset.copy);
     copyText(body ? `# apkllm-web · ${tab} · ${card} · ${cell(report.file.name)}\n` + body : "", btn);
     return;
   }
@@ -1574,10 +1614,10 @@ document.addEventListener("click", (e) => {
   if (item && report && e.detail < 2 && !(sel?.toString() && sel.containsNode(item, true))) {
     const name = ITEM[item.dataset.src]?.(Number(item.dataset.i));
     if (typeof name !== "string") return;
-    // in the Extract table a double-click downloads: wait out the double-click window so the
+    // in the entries table a double-click downloads: wait out the double-click window so the
     // first click of a double-click does not also overwrite the clipboard
     clearTimeout(pendingCopy);
-    if (item.closest("#extract-table")) pendingCopy = setTimeout(() => copyText(name, item), 320);
+    if (item.closest("#entries-table")) pendingCopy = setTimeout(() => copyText(name, item), 320);
     else copyText(name, item);
   }
 });
